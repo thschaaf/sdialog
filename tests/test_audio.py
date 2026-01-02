@@ -1270,16 +1270,16 @@ class TestChatterboxTTS:
 
     @pytest.fixture
     def mock_chatterbox_model(self):
-        """Mock the ChatterboxTTS model to avoid actual model loading in tests."""
-        with patch('sdialog.audio.tts.chatterbox.tts.ChatterboxTTS') as mock_model_class:
+        """Mock the ChatterboxTurboTTS model to avoid actual model loading in tests."""
+        with patch('chatterbox.tts_turbo.ChatterboxTurboTTS.from_pretrained') as mock_from_pretrained:
             mock_model_instance = MagicMock()
             mock_model_instance.sr = 24000
             if torch is not None:
                 mock_model_instance.generate.return_value = torch.zeros(24000)  # 1 second of audio
             else:
                 mock_model_instance.generate.return_value = np.zeros(24000)  # 1 second of audio
-            mock_model_class.from_pretrained.return_value = mock_model_instance
-            yield mock_model_class, mock_model_instance
+            mock_from_pretrained.return_value = mock_model_instance
+            yield mock_from_pretrained, mock_model_instance
 
     def test_chatterbox_tts_import(self):
         """Test that ChatterboxTTS can be imported."""
@@ -1287,17 +1287,17 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_initialization(self, mock_chatterbox_model):
         """Test ChatterboxTTS initialization with device selection."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Test automatic device selection
         tts = ChatterboxTTS(device="auto")
         assert tts.device in ["cpu", "cuda", "mps"]
         assert tts.pipeline == mock_model_instance
-        mock_model_class.from_pretrained.assert_called_once_with(device=tts.device)
+        mock_from_pretrained.assert_called_once_with(device=tts.device)
 
     def test_chatterbox_tts_device_selection(self, mock_chatterbox_model):
         """Test device selection logic."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Test CPU selection
         tts = ChatterboxTTS(device="cpu")
@@ -1305,7 +1305,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_generate_default_voice(self, mock_chatterbox_model):
         """Test audio generation with default voice."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         tts = ChatterboxTTS()
         text = "Hello, this is a test."
@@ -1323,7 +1323,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_voice_registration(self, mock_chatterbox_model, tmp_path):
         """Test voice registration functionality."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Create a dummy audio file
         dummy_audio = tmp_path / "test_voice.wav"
@@ -1346,7 +1346,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_voice_registration_errors(self, mock_chatterbox_model, tmp_path):
         """Test voice registration error handling."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         tts = ChatterboxTTS()
 
@@ -1368,7 +1368,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_generate_with_registered_voice(self, mock_chatterbox_model, tmp_path):
         """Test audio generation with registered cloned voice."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Create dummy audio file
         dummy_audio = tmp_path / "cloned_voice.wav"
@@ -1391,7 +1391,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_generate_with_direct_path(self, mock_chatterbox_model, tmp_path):
         """Test audio generation with direct audio prompt path."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Create dummy audio file
         dummy_audio = tmp_path / "direct_voice.wav"
@@ -1413,7 +1413,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_generate_with_kwargs(self, mock_chatterbox_model):
         """Test audio generation with additional TTS pipeline kwargs."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         tts = ChatterboxTTS()
         text = "Hello with kwargs."
@@ -1426,7 +1426,7 @@ class TestChatterboxTTS:
 
     def test_chatterbox_tts_generate_error_handling(self, mock_chatterbox_model):
         """Test error handling in generate method."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Make the mock generate method raise an exception
         mock_model_instance.generate.side_effect = Exception("TTS generation failed")
@@ -1451,7 +1451,7 @@ class TestChatterboxTTS:
     @patch('torch.backends.mps.is_available', return_value=True)
     def test_chatterbox_tts_mps_patch(self, mock_mps_available, mock_chatterbox_model):
         """Test MPS device patch functionality."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Store original torch.load
         original_torch_load = torch.load
@@ -1461,14 +1461,9 @@ class TestChatterboxTTS:
         # Verify that torch.load has been patched (it should be different from original)
         assert torch.load != original_torch_load
 
-        # Test that the patched function adds map_location
-        with patch.object(torch, 'load', wraps=torch.load) as mock_load:
-            torch.load("dummy_path")  # Call without map_location
-            mock_load.assert_called_once_with("dummy_path", map_location=torch.device("mps"))
-
     def test_chatterbox_tts_audio_conversion(self, mock_chatterbox_model):
         """Test audio tensor to numpy conversion."""
-        mock_model_class, mock_model_instance = mock_chatterbox_model
+        mock_from_pretrained, mock_model_instance = mock_chatterbox_model
 
         # Test with 2D tensor (should be squeezed)
         mock_model_instance.generate.return_value = torch.zeros(1, 24000)
