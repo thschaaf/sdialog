@@ -55,6 +55,21 @@ norecursedirs = "tutorials/dscaper"
 addopts = [
     "--import-mode=importlib",
 ]
+filterwarnings = [
+    # Suppress external dependency deprecation warnings
+    "ignore:pkg_resources is deprecated:UserWarning",
+    "ignore:Deprecated call to.*declare_namespace:DeprecationWarning",
+    "ignore:.*LoRACompatibleLinear.*is deprecated:FutureWarning",
+    "ignore:.*librosa.core.audio.*Deprecated:FutureWarning", 
+    # Suppress Python 3.13 deprecation warnings from audio libraries
+    "ignore:'aifc' is deprecated:DeprecationWarning",
+    "ignore:'audioop' is deprecated:DeprecationWarning", 
+    "ignore:'sunau' is deprecated:DeprecationWarning",
+    # Suppress torchaudio backend dispatch warnings
+    "ignore:Torchaudio's I/O functions now support par-call bakcend dispatch:UserWarning",
+    # Suppress ChatterboxTTS-related warnings
+    "ignore:PySoundFile failed.*audioread:UserWarning",
+]
 
 [tool.flake8]
 max-line-length = 120
