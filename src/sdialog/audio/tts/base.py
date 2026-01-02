@@ -13,7 +13,7 @@ Example:
 
     .. code-block:: python
 
-        from sdialog.audio.tts import KokoroTTS, IndexTTS, HuggingFaceTTS
+        from sdialog.audio.tts import KokoroTTS, IndexTTS, HuggingFaceTTS, ChatterboxTTS
 
         # Initialize Kokoro TTS for American English
         tts = KokoroTTS(lang_code="a")
@@ -26,6 +26,11 @@ Example:
         # Initialize HuggingFaceTTS for facebook/mms-tts-eng model
         tts = HuggingFaceTTS(model_id="facebook/mms-tts-eng")
         audio, sample_rate = tts.generate("[clears throat] This is a test ...")
+
+        # Initialize ChatterboxTTS with voice cloning
+        tts = ChatterboxTTS(device="auto")
+        tts.register_voice("MyVoice", "./my_voice_sample.wav")
+        audio, sample_rate = tts.generate("Hello with cloned voice", voice="MyVoice")
 """
 
 # SPDX-FileCopyrightText: Copyright © 2025 Idiap Research Institute <contact@idiap.ch>

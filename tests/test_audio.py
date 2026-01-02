@@ -5,6 +5,12 @@ import pytest
 import numpy as np
 import pandas as pd
 
+# Try to import torch for ChatterboxTTS tests
+try:
+    import torch
+except ImportError:
+    torch = None
+
 # Try to import audio dependencies
 try:
     import soundfile as sf
@@ -23,10 +29,20 @@ try:
     from sdialog.audio.dscaper_utils import send_utterances_to_dscaper, generate_dscaper_timeline
     from sdialog.audio.impulse_response_database import LocalImpulseResponseDatabase, RecordingDevice
     from sdialog.audio.processing import AudioProcessor
+
+    # Try to import ChatterboxTTS (may fail if dependencies not available)
+    try:
+        from sdialog.audio.tts import ChatterboxTTS
+        CHATTERBOX_AVAILABLE = True
+    except ImportError:
+        CHATTERBOX_AVAILABLE = False
+
 except ImportError:
     print("\n" + "=" * 80)
     print("Audio dependencies are not installed. All audio tests will be skipped.")
     print("=" * 80 + "\n")
+
+    CHATTERBOX_AVAILABLE = False
 
     # Skip the entire module - pytest will not collect any tests from this file
     pytest.skip(
@@ -44,9 +60,6 @@ def test_position3d_initialization():
     assert pos.x == 1.0
     assert pos.y == 2.0
     assert pos.z == 3.0
-
-
-def test_position3d_negative_coords():
     with pytest.raises(ValueError):
         Position3D(-1.0, 2.0, 3.0)
 
@@ -1248,6 +1261,223 @@ def test_apply_microphone_effect_resampling(mock_resample, mock_sf_read, audio_p
         impulse_response_database=mock_db
     )
     mock_resample.assert_called_once()
+
+
+# Tests for ChatterboxTTS
+@pytest.mark.skipif(not CHATTERBOX_AVAILABLE, reason="ChatterboxTTS dependencies not available")
+class TestChatterboxTTS:
+    """Test suite for ChatterboxTTS integration."""
+
+    @pytest.fixture
+    def mock_chatterbox_model(self):
+        """Mock the ChatterboxTTS model to avoid actual model loading in tests."""
+        with patch('sdialog.audio.tts.chatterbox.tts.ChatterboxTTS') as mock_model_class:
+            mock_model_instance = MagicMock()
+            mock_model_instance.sr = 24000
+            if torch is not None:
+                mock_model_instance.generate.return_value = torch.zeros(24000)  # 1 second of audio
+            else:
+                mock_model_instance.generate.return_value = np.zeros(24000)  # 1 second of audio
+            mock_model_class.from_pretrained.return_value = mock_model_instance
+            yield mock_model_class, mock_model_instance
+
+    def test_chatterbox_tts_import(self):
+        """Test that ChatterboxTTS can be imported."""
+        assert ChatterboxTTS is not None
+
+    def test_chatterbox_tts_initialization(self, mock_chatterbox_model):
+        """Test ChatterboxTTS initialization with device selection."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Test automatic device selection
+        tts = ChatterboxTTS(device="auto")
+        assert tts.device in ["cpu", "cuda", "mps"]
+        assert tts.pipeline == mock_model_instance
+        mock_model_class.from_pretrained.assert_called_once_with(device=tts.device)
+
+    def test_chatterbox_tts_device_selection(self, mock_chatterbox_model):
+        """Test device selection logic."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Test CPU selection
+        tts = ChatterboxTTS(device="cpu")
+        assert tts.device == "cpu"
+
+    def test_chatterbox_tts_generate_default_voice(self, mock_chatterbox_model):
+        """Test audio generation with default voice."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        tts = ChatterboxTTS()
+        text = "Hello, this is a test."
+
+        audio, sr = tts.generate(text, speaker_voice="default")
+
+        # Verify the mock was called correctly
+        mock_model_instance.generate.assert_called_once_with(text)
+
+        # Verify output format
+        assert isinstance(audio, np.ndarray)
+        assert isinstance(sr, int)
+        assert sr == 24000
+        assert len(audio) > 0
+
+    def test_chatterbox_tts_voice_registration(self, mock_chatterbox_model, tmp_path):
+        """Test voice registration functionality."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxTTS()
+
+        # Test voice registration
+        tts.register_voice("test_voice", str(dummy_audio))
+        assert "test_voice" in tts.voice_registry
+        assert tts.voice_registry["test_voice"] == str(dummy_audio.absolute())
+
+        # Test listing voices
+        voices = tts.list_voices()
+        assert "test_voice" in voices
+
+        # Test voice unregistration
+        tts.unregister_voice("test_voice")
+        assert "test_voice" not in tts.voice_registry
+
+    def test_chatterbox_tts_voice_registration_errors(self, mock_chatterbox_model, tmp_path):
+        """Test voice registration error handling."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        tts = ChatterboxTTS()
+
+        # Test registering non-existent file
+        with pytest.raises(FileNotFoundError):
+            tts.register_voice("bad_voice", "/path/to/nonexistent/file.wav")
+
+        # Test duplicate registration
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+        tts.register_voice("duplicate_test", str(dummy_audio))
+
+        with pytest.raises(ValueError, match="Voice 'duplicate_test' is already registered"):
+            tts.register_voice("duplicate_test", str(dummy_audio))
+
+        # Test unregistering non-existent voice
+        with pytest.raises(KeyError, match="Voice 'nonexistent' is not registered"):
+            tts.unregister_voice("nonexistent")
+
+    def test_chatterbox_tts_generate_with_registered_voice(self, mock_chatterbox_model, tmp_path):
+        """Test audio generation with registered cloned voice."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Create dummy audio file
+        dummy_audio = tmp_path / "cloned_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxTTS()
+        tts.register_voice("cloned_voice", str(dummy_audio))
+
+        text = "Hello with cloned voice."
+        audio, sr = tts.generate(text, speaker_voice="cloned_voice")
+
+        # Verify the mock was called with audio_prompt_path
+        mock_model_instance.generate.assert_called_once_with(
+            text,
+            audio_prompt_path=str(dummy_audio.absolute())
+        )
+
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_chatterbox_tts_generate_with_direct_path(self, mock_chatterbox_model, tmp_path):
+        """Test audio generation with direct audio prompt path."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Create dummy audio file
+        dummy_audio = tmp_path / "direct_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxTTS()
+        text = "Hello with direct path."
+
+        audio, sr = tts.generate(text, speaker_voice=str(dummy_audio))
+
+        # Verify the mock was called with audio_prompt_path
+        mock_model_instance.generate.assert_called_once_with(
+            text,
+            audio_prompt_path=str(dummy_audio)
+        )
+
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_chatterbox_tts_generate_with_kwargs(self, mock_chatterbox_model):
+        """Test audio generation with additional TTS pipeline kwargs."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        tts = ChatterboxTTS()
+        text = "Hello with kwargs."
+        kwargs = {"temperature": 0.7, "top_p": 0.9}
+
+        audio, sr = tts.generate(text, speaker_voice="default", tts_pipeline_kwargs=kwargs)
+
+        # Verify the mock was called with kwargs
+        mock_model_instance.generate.assert_called_once_with(text, **kwargs)
+
+    def test_chatterbox_tts_generate_error_handling(self, mock_chatterbox_model):
+        """Test error handling in generate method."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Make the mock generate method raise an exception
+        mock_model_instance.generate.side_effect = Exception("TTS generation failed")
+
+        tts = ChatterboxTTS()
+
+        with pytest.raises(RuntimeError, match="Failed to generate audio with Chatterbox TTS"):
+            tts.generate("test text", "default")
+
+    def test_chatterbox_tts_device_error_handling(self):
+        """Test device selection error handling."""
+        # Test CUDA not available error
+        with patch('torch.cuda.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="CUDA device requested but not available"):
+                ChatterboxTTS(device="cuda")
+
+        # Test MPS not available error
+        with patch('torch.backends.mps.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="MPS device requested but not available"):
+                ChatterboxTTS(device="mps")
+
+    @patch('torch.backends.mps.is_available', return_value=True)
+    def test_chatterbox_tts_mps_patch(self, mock_mps_available, mock_chatterbox_model):
+        """Test MPS device patch functionality."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Store original torch.load
+        original_torch_load = torch.load
+
+        ChatterboxTTS(device="mps")
+
+        # Verify that torch.load has been patched (it should be different from original)
+        assert torch.load != original_torch_load
+
+        # Test that the patched function adds map_location
+        with patch.object(torch, 'load', wraps=torch.load) as mock_load:
+            torch.load("dummy_path")  # Call without map_location
+            mock_load.assert_called_once_with("dummy_path", map_location=torch.device("mps"))
+
+    def test_chatterbox_tts_audio_conversion(self, mock_chatterbox_model):
+        """Test audio tensor to numpy conversion."""
+        mock_model_class, mock_model_instance = mock_chatterbox_model
+
+        # Test with 2D tensor (should be squeezed)
+        mock_model_instance.generate.return_value = torch.zeros(1, 24000)
+
+        tts = ChatterboxTTS()
+        audio, sr = tts.generate("test", "default")
+
+        assert audio.ndim == 1  # Should be squeezed to 1D
+        assert audio.dtype == np.float32
 
 
 @patch('sdialog.audio.processing.sf.write')
