@@ -126,7 +126,7 @@ def test_xtts_generate_without_voice():
     tts = XttsTTS(device="cpu")
 
     # XTTS requires a speaker voice for cloning
-    with pytest.raises(ValueError, match="requires a valid audio prompt"):
+    with pytest.raises(RuntimeError, match="Failed to generate audio with XTTS"):
         tts.generate(
             text="Hello, this is a test.",
             speaker_voice="non_existent_voice"

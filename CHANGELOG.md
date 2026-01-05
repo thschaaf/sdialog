@@ -4,6 +4,18 @@ All notable changes to SDialog will be documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+- **sdialog.audio.tts**: XTTS (Coqui TTS) integration for multilingual voice cloning
+  - Support for 17+ languages with voice cloning capabilities
+  - Voice registration system for managing cloned voices
+  - Automatic device selection (CUDA > MPS > CPU)
+  - PyTorch 2.6 compatibility with model loading safety check handling
+  - Example script and comprehensive documentation
+
+---
+
 ## [0.4.0] 2025-10-30 🔊
 
 ### Added
