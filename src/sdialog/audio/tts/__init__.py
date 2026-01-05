@@ -3,5 +3,6 @@ from .huggingface import HuggingFaceTTS
 from .index import IndexTTS
 from .kokoro import KokoroTTS
 from .chatterbox import ChatterboxTTS
+from .xtts import XttsTTS
 
-__all__ = ["BaseTTS", "KokoroTTS", "IndexTTS", "HuggingFaceTTS", "ChatterboxTTS"]
+__all__ = ["BaseTTS", "KokoroTTS", "IndexTTS", "HuggingFaceTTS", "ChatterboxTTS", "XttsTTS"]
