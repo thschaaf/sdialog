@@ -142,8 +142,33 @@ class ChatterboxMultilingualTTS(BaseTTS):
         if hasattr(self.pipeline, 'supported_languages'):
             return self.pipeline.supported_languages
         else:
-            # Fallback to common multilingual TTS languages
-            return ["en", "es", "fr", "de", "it", "pt", "zh", "ja", "ko", "ar", "hi", "ru"]
+            # Fallback to actual Chatterbox Multilingual supported languages (23 languages)
+            # Based on official documentation: https://github.com/resemble-ai/chatterbox
+            return [
+                "ar",  # Arabic
+                "da",  # Danish
+                "de",  # German
+                "el",  # Greek
+                "en",  # English
+                "es",  # Spanish
+                "fi",  # Finnish
+                "fr",  # French
+                "he",  # Hebrew
+                "hi",  # Hindi
+                "it",  # Italian
+                "ja",  # Japanese
+                "ko",  # Korean
+                "ms",  # Malay
+                "nl",  # Dutch
+                "no",  # Norwegian
+                "pl",  # Polish
+                "pt",  # Portuguese
+                "ru",  # Russian
+                "sv",  # Swedish
+                "sw",  # Swahili
+                "tr",  # Turkish
+                "zh"   # Chinese
+            ]
 
     def register_voice(self, voice_name: str, audio_prompt_path: str) -> None:
         """
@@ -235,8 +260,8 @@ class ChatterboxMultilingualTTS(BaseTTS):
             )
 
         try:
-            # Add language parameter
-            tts_kwargs = {"language": language, **tts_pipeline_kwargs}
+            # Add language_id parameter (Chatterbox API uses language_id, not language)
+            tts_kwargs = {"language_id": language, **tts_pipeline_kwargs}
 
             # Check if speaker_voice is a registered voice name
             if speaker_voice in self.voice_registry:

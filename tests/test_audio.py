@@ -1585,14 +1585,14 @@ class TestChatterboxMultilingualTTS:
 
         # Test with default language (English)
         audio, sr = tts.generate(text, speaker_voice="default")
-        mock_model_instance.generate.assert_called_once_with(text, language="en")
+        mock_model_instance.generate.assert_called_once_with(text, language_id="en")
 
         # Reset mock
         mock_model_instance.generate.reset_mock()
 
         # Test with Spanish
         audio_es, sr = tts.generate(text, speaker_voice="default", language="es")
-        mock_model_instance.generate.assert_called_once_with(text, language="es")
+        mock_model_instance.generate.assert_called_once_with(text, language_id="es")
 
         # Verify output format
         assert isinstance(audio, np.ndarray)
@@ -1670,11 +1670,11 @@ class TestChatterboxMultilingualTTS:
         text = "Hello with cloned voice."
         audio, sr = tts.generate(text, speaker_voice="cloned_voice", language="fr")
 
-        # Verify the mock was called with audio_prompt_path and language
+        # Verify the mock was called with audio_prompt_path and language_id
         mock_model_instance.generate.assert_called_once_with(
             text,
             audio_prompt_path=str(dummy_audio.absolute()),
-            language="fr"
+            language_id="fr"
         )
 
         assert isinstance(audio, np.ndarray)
@@ -1693,11 +1693,11 @@ class TestChatterboxMultilingualTTS:
 
         audio, sr = tts.generate(text, speaker_voice=str(dummy_audio), language="es")
 
-        # Verify the mock was called with audio_prompt_path and language
+        # Verify the mock was called with audio_prompt_path and language_id
         mock_model_instance.generate.assert_called_once_with(
             text,
             audio_prompt_path=str(dummy_audio),
-            language="es"
+            language_id="es"
         )
 
         assert isinstance(audio, np.ndarray)
@@ -1713,8 +1713,8 @@ class TestChatterboxMultilingualTTS:
 
         audio, sr = tts.generate(text, speaker_voice="default", language="de", tts_pipeline_kwargs=kwargs)
 
-        # Verify the mock was called with language and kwargs merged
-        expected_kwargs = {"language": "de", "temperature": 0.7, "top_p": 0.9}
+        # Verify the mock was called with language_id and kwargs merged
+        expected_kwargs = {"language_id": "de", "temperature": 0.7, "top_p": 0.9}
         mock_model_instance.generate.assert_called_once_with(text, **expected_kwargs)
 
     def test_multilingual_chatterbox_tts_generate_error_handling(self, mock_multilingual_chatterbox_model):
