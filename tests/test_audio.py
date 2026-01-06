@@ -37,12 +37,20 @@ try:
     except ImportError:
         CHATTERBOX_AVAILABLE = False
 
+    # Try to import ChatterboxMultilingualTTS (may fail if dependencies not available)
+    try:
+        from sdialog.audio.tts.chatterbox import ChatterboxMultilingualTTS
+        CHATTERBOX_MULTILINGUAL_AVAILABLE = True
+    except ImportError:
+        CHATTERBOX_MULTILINGUAL_AVAILABLE = False
+
 except ImportError:
     print("\n" + "=" * 80)
     print("Audio dependencies are not installed. All audio tests will be skipped.")
     print("=" * 80 + "\n")
 
     CHATTERBOX_AVAILABLE = False
+    CHATTERBOX_MULTILINGUAL_AVAILABLE = False
 
     # Skip the entire module - pytest will not collect any tests from this file
     pytest.skip(
@@ -1499,3 +1507,280 @@ def test_apply_microphone_effect_ir_not_found(audio_processor_setup):
     mock_db.get_ir.return_value = "nonexistent_ir.wav"
     with pytest.raises(ValueError, match="Impulse response path not found"):
         AudioProcessor.apply_microphone_effect(str(input_path), str(output_path), "dummy", mock_db)
+
+
+# Tests for ChatterboxMultilingualTTS
+@pytest.mark.skipif(
+    not CHATTERBOX_MULTILINGUAL_AVAILABLE,
+    reason="ChatterboxMultilingualTTS dependencies not available"
+)
+class TestChatterboxMultilingualTTS:
+    """Test suite for ChatterboxMultilingualTTS integration."""
+
+    @pytest.fixture
+    def mock_multilingual_chatterbox_model(self):
+        """Mock the ChatterboxMultilingualTTS model to avoid actual model loading in tests."""
+        with patch(
+            'chatterbox.tts_multilingual.ChatterboxMultilingualTTS.from_pretrained'
+        ) as mock_from_pretrained:
+            mock_model_instance = MagicMock()
+            mock_model_instance.sr = 24000
+            mock_model_instance.supported_languages = ["en", "es", "fr", "de", "it", "pt"]
+            if torch is not None:
+                mock_model_instance.generate.return_value = torch.zeros(24000)  # 1 second of audio
+            else:
+                mock_model_instance.generate.return_value = np.zeros(24000)  # 1 second of audio
+            mock_from_pretrained.return_value = mock_model_instance
+            yield mock_from_pretrained, mock_model_instance
+
+    def test_multilingual_chatterbox_tts_import(self):
+        """Test that ChatterboxMultilingualTTS can be imported."""
+        assert ChatterboxMultilingualTTS is not None
+
+    def test_multilingual_chatterbox_tts_initialization(self, mock_multilingual_chatterbox_model):
+        """Test ChatterboxMultilingualTTS initialization with device selection."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Test automatic device selection
+        tts = ChatterboxMultilingualTTS(device="auto")
+        assert tts.device in ["cpu", "cuda", "mps"]
+        assert tts.pipeline == mock_model_instance
+        mock_from_pretrained.assert_called_once_with(device=tts.device)
+
+        # Test supported languages initialization
+        assert isinstance(tts.supported_languages, list)
+        assert "en" in tts.supported_languages
+
+    def test_multilingual_chatterbox_tts_device_selection(self, mock_multilingual_chatterbox_model):
+        """Test device selection logic."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Test CPU selection
+        tts = ChatterboxMultilingualTTS(device="cpu")
+        assert tts.device == "cpu"
+
+    def test_multilingual_chatterbox_tts_supported_languages(self, mock_multilingual_chatterbox_model):
+        """Test supported languages functionality."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        tts = ChatterboxMultilingualTTS()
+
+        # Test get_supported_languages method
+        languages = tts.get_supported_languages()
+        assert isinstance(languages, list)
+        assert "en" in languages
+        assert "es" in languages
+
+        # Test that returned list is a copy (modification doesn't affect internal list)
+        original_count = len(tts.supported_languages)
+        languages.append("fake_lang")
+        assert len(tts.supported_languages) == original_count
+
+    def test_multilingual_chatterbox_tts_generate_default_voice(self, mock_multilingual_chatterbox_model):
+        """Test audio generation with default voice in different languages."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        tts = ChatterboxMultilingualTTS()
+        text = "Hello, this is a test."
+
+        # Test with default language (English)
+        audio, sr = tts.generate(text, speaker_voice="default")
+        mock_model_instance.generate.assert_called_once_with(text, language="en")
+
+        # Reset mock
+        mock_model_instance.generate.reset_mock()
+
+        # Test with Spanish
+        audio_es, sr = tts.generate(text, speaker_voice="default", language="es")
+        mock_model_instance.generate.assert_called_once_with(text, language="es")
+
+        # Verify output format
+        assert isinstance(audio, np.ndarray)
+        assert isinstance(sr, int)
+        assert sr == 24000
+        assert len(audio) > 0
+
+    def test_multilingual_chatterbox_tts_unsupported_language(self, mock_multilingual_chatterbox_model):
+        """Test error handling for unsupported languages."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        tts = ChatterboxMultilingualTTS()
+
+        with pytest.raises(ValueError, match="Language 'unsupported' not supported"):
+            tts.generate("test text", "default", language="unsupported")
+
+    def test_multilingual_chatterbox_tts_voice_registration(self, mock_multilingual_chatterbox_model, tmp_path):
+        """Test voice registration functionality."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxMultilingualTTS()
+
+        # Test voice registration
+        tts.register_voice("test_voice", str(dummy_audio))
+        assert "test_voice" in tts.voice_registry
+        assert tts.voice_registry["test_voice"] == str(dummy_audio.absolute())
+
+        # Test listing voices
+        voices = tts.list_voices()
+        assert "test_voice" in voices
+
+        # Test voice unregistration
+        tts.unregister_voice("test_voice")
+        assert "test_voice" not in tts.voice_registry
+
+    def test_multilingual_chatterbox_tts_voice_registration_errors(self, mock_multilingual_chatterbox_model, tmp_path):
+        """Test voice registration error handling."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        tts = ChatterboxMultilingualTTS()
+
+        # Test registering non-existent file
+        with pytest.raises(FileNotFoundError):
+            tts.register_voice("bad_voice", "/path/to/nonexistent/file.wav")
+
+        # Test duplicate registration
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+        tts.register_voice("duplicate_test", str(dummy_audio))
+
+        with pytest.raises(ValueError, match="Voice 'duplicate_test' is already registered"):
+            tts.register_voice("duplicate_test", str(dummy_audio))
+
+        # Test unregistering non-existent voice
+        with pytest.raises(KeyError, match="Voice 'nonexistent' is not registered"):
+            tts.unregister_voice("nonexistent")
+
+    def test_multilingual_chatterbox_tts_generate_with_registered_voice(
+        self, mock_multilingual_chatterbox_model, tmp_path
+    ):
+        """Test audio generation with registered cloned voice in different languages."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Create dummy audio file
+        dummy_audio = tmp_path / "cloned_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxMultilingualTTS()
+        tts.register_voice("cloned_voice", str(dummy_audio))
+
+        text = "Hello with cloned voice."
+        audio, sr = tts.generate(text, speaker_voice="cloned_voice", language="fr")
+
+        # Verify the mock was called with audio_prompt_path and language
+        mock_model_instance.generate.assert_called_once_with(
+            text,
+            audio_prompt_path=str(dummy_audio.absolute()),
+            language="fr"
+        )
+
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_multilingual_chatterbox_tts_generate_with_direct_path(self, mock_multilingual_chatterbox_model, tmp_path):
+        """Test audio generation with direct audio prompt path."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Create dummy audio file
+        dummy_audio = tmp_path / "direct_voice.wav"
+        dummy_audio.touch()
+
+        tts = ChatterboxMultilingualTTS()
+        text = "Hola con path directo."
+
+        audio, sr = tts.generate(text, speaker_voice=str(dummy_audio), language="es")
+
+        # Verify the mock was called with audio_prompt_path and language
+        mock_model_instance.generate.assert_called_once_with(
+            text,
+            audio_prompt_path=str(dummy_audio),
+            language="es"
+        )
+
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_multilingual_chatterbox_tts_generate_with_kwargs(self, mock_multilingual_chatterbox_model):
+        """Test audio generation with additional TTS pipeline kwargs."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        tts = ChatterboxMultilingualTTS()
+        text = "Hello with kwargs."
+        kwargs = {"temperature": 0.7, "top_p": 0.9}
+
+        audio, sr = tts.generate(text, speaker_voice="default", language="de", tts_pipeline_kwargs=kwargs)
+
+        # Verify the mock was called with language and kwargs merged
+        expected_kwargs = {"language": "de", "temperature": 0.7, "top_p": 0.9}
+        mock_model_instance.generate.assert_called_once_with(text, **expected_kwargs)
+
+    def test_multilingual_chatterbox_tts_generate_error_handling(self, mock_multilingual_chatterbox_model):
+        """Test error handling in generate method."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Make the mock generate method raise an exception
+        mock_model_instance.generate.side_effect = Exception("TTS generation failed")
+
+        tts = ChatterboxMultilingualTTS()
+
+        with pytest.raises(
+            RuntimeError, match="Failed to generate multilingual audio with Chatterbox TTS"
+        ):
+            tts.generate("test text", "default", "en")
+
+    def test_multilingual_chatterbox_tts_device_error_handling(self):
+        """Test device selection error handling."""
+        # Test CUDA not available error
+        with patch('torch.cuda.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="CUDA device requested but not available"):
+                ChatterboxMultilingualTTS(device="cuda")
+
+        # Test MPS not available error
+        with patch('torch.backends.mps.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="MPS device requested but not available"):
+                ChatterboxMultilingualTTS(device="mps")
+
+    @patch('torch.backends.mps.is_available', return_value=True)
+    def test_multilingual_chatterbox_tts_mps_patch(self, mock_mps_available, mock_multilingual_chatterbox_model):
+        """Test MPS device patch functionality."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Store original torch.load
+        original_torch_load = torch.load
+
+        ChatterboxMultilingualTTS(device="mps")
+
+        # Verify that torch.load has been patched (it should be different from original)
+        assert torch.load != original_torch_load
+
+    def test_multilingual_chatterbox_tts_audio_conversion(self, mock_multilingual_chatterbox_model):
+        """Test audio tensor to numpy conversion."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Test with 2D tensor (should be squeezed)
+        mock_model_instance.generate.return_value = torch.zeros(1, 24000)
+
+        tts = ChatterboxMultilingualTTS()
+        audio, sr = tts.generate("test", "default", "en")
+
+        assert audio.ndim == 1  # Should be squeezed to 1D
+        assert audio.dtype == np.float32
+
+    def test_multilingual_chatterbox_tts_fallback_languages(self, mock_multilingual_chatterbox_model):
+        """Test fallback to default language list when model doesn't expose supported languages."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Remove supported_languages attribute to test fallback
+        delattr(mock_model_instance, 'supported_languages')
+
+        tts = ChatterboxMultilingualTTS()
+
+        # Should use fallback language list
+        languages = tts.get_supported_languages()
+        assert "en" in languages
+        assert "es" in languages
+        assert "zh" in languages
+        assert len(languages) >= 10  # Should have several fallback languages
