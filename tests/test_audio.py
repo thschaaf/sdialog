@@ -1784,3 +1784,20 @@ class TestChatterboxMultilingualTTS:
         assert "es" in languages
         assert "zh" in languages
         assert len(languages) >= 10  # Should have several fallback languages
+
+    def test_multilingual_chatterbox_tts_device_mapping_fix(self, mock_multilingual_chatterbox_model):
+        """Test that device mapping fix method exists and handles CPU compatibility."""
+        mock_from_pretrained, mock_model_instance = mock_multilingual_chatterbox_model
+
+        # Test initialization with CPU device
+        tts = ChatterboxMultilingualTTS(device="cpu")
+
+        # Verify the device mapping method exists
+        assert hasattr(tts, '_initialize_model_with_device_fix')
+        assert tts.device == "cpu"
+
+        # Test auto device selection on systems without CUDA
+        with patch('torch.cuda.is_available', return_value=False), \
+             patch('torch.backends.mps.is_available', return_value=False):
+            tts_auto = ChatterboxMultilingualTTS(device="auto")
+            assert tts_auto.device == "cpu"

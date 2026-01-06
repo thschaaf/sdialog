@@ -4,10 +4,13 @@
 
 import torch
 import numpy as np
+import logging
 from typing import Dict
 from pathlib import Path
 
 from ..base import BaseTTS
+
+logger = logging.getLogger(__name__)
 
 
 class ChatterboxMultilingualTTS(BaseTTS):
@@ -84,8 +87,8 @@ class ChatterboxMultilingualTTS(BaseTTS):
         if self.device == "mps":
             self._apply_mps_patch()
 
-        # Initialize the Chatterbox multilingual model
-        self.pipeline = ChatterboxModel.from_pretrained(device=self.device)
+        # Initialize the Chatterbox multilingual model with device mapping fix
+        self._initialize_model_with_device_fix(ChatterboxModel)
 
         # Initialize supported languages
         self.supported_languages = self._get_supported_languages()
@@ -131,6 +134,41 @@ class ChatterboxMultilingualTTS(BaseTTS):
             return torch_load_original(*args, **kwargs)
 
         torch.load = patched_torch_load
+
+    def _initialize_model_with_device_fix(self, ChatterboxModel):
+        """
+        Initialize the Chatterbox model with device compatibility fixes.
+
+        This method handles the common issue where models trained on CUDA
+        fail to load on CPU-only machines due to missing map_location parameter.
+
+        :param ChatterboxModel: The ChatterboxMultilingualTTS class from chatterbox.mtl_tts
+        :type ChatterboxModel: type
+        """
+        # Store original torch.load
+        original_torch_load = torch.load
+
+        def device_aware_torch_load(*args, **kwargs):
+            # If CUDA is not available and no map_location is specified,
+            # force CPU loading to prevent CUDA deserialization errors
+            if not torch.cuda.is_available() and 'map_location' not in kwargs:
+                kwargs['map_location'] = torch.device('cpu')
+                logger.debug("Applied CPU map_location for CUDA-incompatible environment")
+            return original_torch_load(*args, **kwargs)
+
+        # Temporarily patch torch.load
+        torch.load = device_aware_torch_load
+
+        try:
+            # Initialize the model with the patched torch.load
+            self.pipeline = ChatterboxModel.from_pretrained(device=self.device)
+            logger.info(f"Successfully initialized ChatterboxMultilingualTTS on device: {self.device}")
+        except Exception as e:
+            logger.error(f"Failed to initialize ChatterboxMultilingualTTS: {e}")
+            raise
+        finally:
+            # Always restore the original torch.load
+            torch.load = original_torch_load
 
     def _get_supported_languages(self) -> list[str]:
         """
