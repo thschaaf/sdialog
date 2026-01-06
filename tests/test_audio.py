@@ -1521,7 +1521,7 @@ class TestChatterboxMultilingualTTS:
     def mock_multilingual_chatterbox_model(self):
         """Mock the ChatterboxMultilingualTTS model to avoid actual model loading in tests."""
         with patch(
-            'chatterbox.tts_multilingual.ChatterboxMultilingualTTS.from_pretrained'
+            'chatterbox.mtl_tts.ChatterboxMultilingualTTS.from_pretrained'
         ) as mock_from_pretrained:
             mock_model_instance = MagicMock()
             mock_model_instance.sr = 24000

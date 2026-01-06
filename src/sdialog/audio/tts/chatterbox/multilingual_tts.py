@@ -70,7 +70,7 @@ class ChatterboxMultilingualTTS(BaseTTS):
         super().__init__()
 
         try:
-            from chatterbox.tts_multilingual import ChatterboxMultilingualTTS as ChatterboxModel
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS as ChatterboxModel
         except ImportError as exc:
             raise ImportError(
                 "The 'chatterbox' library with multilingual support is required to use ChatterboxMultilingualTTS. "
