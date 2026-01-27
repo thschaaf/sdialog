@@ -7,6 +7,16 @@ All notable changes to SDialog will be documented here.
 ## [Unreleased]
 
 ### Added
+- **sdialog.audio.tts**: Qwen3-TTS integration for rapid multilingual voice cloning
+  - Support for 10 major languages (Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian)
+  - 3-second rapid voice cloning from reference audio
+  - Dual-mode voice cloning: full quality with transcript or transcript-free x_vector mode
+  - Language code normalization (accepts both ISO codes like "en" and full names like "English")
+  - Voice clone prompt caching for efficient reuse
+  - Multiple model variants: 1.7B (default, higher quality) and 0.6B (lightweight for edge devices)
+  - Flash Attention 2 support with auto-detection and graceful fallback
+  - Automatic device selection (CUDA > MPS > CPU) with compatibility fixes
+  - Example script demonstrating all features
 - **sdialog.audio.tts**: XTTS (Coqui TTS) integration for multilingual voice cloning
   - Support for 17+ languages with voice cloning capabilities
   - Voice registration system for managing cloned voices

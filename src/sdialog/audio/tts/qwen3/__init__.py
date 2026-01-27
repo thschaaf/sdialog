@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright © 2025 Idiap Research Institute <contact@idiap.ch>
-# SPDX-FileContributor: Thomas Schaaf <thomas.schaaf@ieee.org>
+# SPDX-FileContributor: Author: Thomas Schaaf <thomas.schaaf@ieee.org>
 # SPDX-License-Identifier: MIT
 
-from .tts import XttsTTS
+from .tts import Qwen3TTS
 
-__all__ = ["XttsTTS"]
+__all__ = ["Qwen3TTS"]

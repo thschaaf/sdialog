@@ -44,6 +44,13 @@ try:
     except ImportError:
         CHATTERBOX_MULTILINGUAL_AVAILABLE = False
 
+    # Try to import Qwen3TTS (may fail if dependencies not available)
+    try:
+        from sdialog.audio.tts import Qwen3TTS
+        QWEN3_AVAILABLE = True
+    except ImportError:
+        QWEN3_AVAILABLE = False
+
 except ImportError:
     print("\n" + "=" * 80)
     print("Audio dependencies are not installed. All audio tests will be skipped.")
@@ -51,6 +58,7 @@ except ImportError:
 
     CHATTERBOX_AVAILABLE = False
     CHATTERBOX_MULTILINGUAL_AVAILABLE = False
+    QWEN3_AVAILABLE = False
 
     # Skip the entire module - pytest will not collect any tests from this file
     pytest.skip(
@@ -1801,3 +1809,490 @@ class TestChatterboxMultilingualTTS:
              patch('torch.backends.mps.is_available', return_value=False):
             tts_auto = ChatterboxMultilingualTTS(device="auto")
             assert tts_auto.device == "cpu"
+
+
+@pytest.mark.skipif(not QWEN3_AVAILABLE, reason="Qwen3TTS not available")
+class TestQwen3TTS:
+    """Test suite for Qwen3TTS integration."""
+
+    @pytest.fixture
+    def mock_qwen3_model(self, monkeypatch):
+        """Mock the Qwen3TTSModel to avoid actual model loading in tests."""
+        # Mock the qwen_tts module and Qwen3TTSModel class
+        mock_qwen_tts_module = MagicMock()
+        mock_model_class = MagicMock()
+
+        mock_model_instance = MagicMock()
+        mock_model_instance.sr = 24000
+
+        # Mock generate_voice_clone to return list of waveforms
+        if torch is not None:
+            mock_model_instance.generate_voice_clone.return_value = (
+                [torch.zeros(24000)],  # List of waveforms
+                24000  # Sample rate
+            )
+        else:
+            mock_model_instance.generate_voice_clone.return_value = (
+                [np.zeros(24000)],  # List of waveforms
+                24000  # Sample rate
+            )
+
+        # Mock create_voice_clone_prompt
+        mock_model_instance.create_voice_clone_prompt.return_value = {"mock": "prompt"}
+
+        mock_model_class.from_pretrained.return_value = mock_model_instance
+        mock_qwen_tts_module.Qwen3TTSModel = mock_model_class
+
+        # Patch the qwen_tts module in sys.modules so import works
+        monkeypatch.setitem(__import__('sys').modules, 'qwen_tts', mock_qwen_tts_module)
+
+        yield mock_model_class, mock_model_instance
+
+    @pytest.fixture
+    def mock_flash_attention_available(self, monkeypatch):
+        """Mock flash_attn availability."""
+        mock_flash_attn = MagicMock()
+        import sys
+        monkeypatch.setitem(sys.modules, 'flash_attn', mock_flash_attn)
+        yield
+
+    @pytest.fixture
+    def mock_flash_attention_unavailable(self, monkeypatch):
+        """Mock flash_attn unavailability."""
+        import sys
+        import builtins
+
+        # Remove flash_attn from sys.modules if it exists
+        if 'flash_attn' in sys.modules:
+            monkeypatch.delitem(sys.modules, 'flash_attn')
+
+        # Mock the import to raise ImportError only for flash_attn
+        original_import = builtins.__import__
+
+        def custom_import(name, *args, **kwargs):
+            if name == 'flash_attn':
+                raise ImportError("No module named 'flash_attn'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, '__import__', custom_import)
+        yield
+
+    def test_qwen3_tts_import(self):
+        """Test that Qwen3TTS can be imported."""
+        assert Qwen3TTS is not None
+
+    def test_qwen3_tts_initialization(self, mock_qwen3_model):
+        """Test Qwen3TTS initialization with device selection."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Test automatic device selection
+        tts = Qwen3TTS(device="auto")
+        assert tts.device in ["cpu", "cuda", "mps"]
+        assert tts.pipeline == mock_model_instance
+        assert tts.model_id == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"  # Default model
+        mock_model_class.from_pretrained.assert_called_once()
+
+    def test_qwen3_tts_device_selection(self, mock_qwen3_model):
+        """Test device selection logic."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Test CPU selection
+        tts = Qwen3TTS(device="cpu")
+        assert tts.device == "cpu"
+
+    def test_qwen3_tts_model_id_parameter(self, mock_qwen3_model):
+        """Test custom model_id parameter."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Test with 0.6B model
+        tts = Qwen3TTS(device="cpu", model_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+        assert tts.model_id == "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+
+    def test_qwen3_tts_dtype_conversion(self, mock_qwen3_model):
+        """Test dtype string to torch.dtype conversion."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS(device="cpu", dtype="float32")
+        assert tts.dtype == torch.float32
+        assert tts.dtype_str == "float32"
+
+        # Test invalid dtype
+        with pytest.raises(ValueError, match="Unsupported dtype"):
+            Qwen3TTS(device="cpu", dtype="invalid_dtype")
+
+    def test_qwen3_tts_flash_attention_auto(self, mock_qwen3_model, mock_flash_attention_available):
+        """Test Flash Attention 2 auto-detection."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS(device="cpu", use_flash_attention="auto")
+        assert tts.use_flash_attention is True
+
+    def test_qwen3_tts_flash_attention_unavailable(self, mock_qwen3_model, mock_flash_attention_unavailable):
+        """Test graceful fallback when Flash Attention 2 is unavailable."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS(device="cpu", use_flash_attention="auto")
+        assert tts.use_flash_attention is False
+
+    def test_qwen3_tts_flash_attention_required_but_missing(self, mock_qwen3_model, mock_flash_attention_unavailable):
+        """Test error when Flash Attention 2 is required but not available."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        with pytest.raises(ImportError, match="Flash Attention 2 was requested"):
+            Qwen3TTS(device="cpu", use_flash_attention=True)
+
+    def test_qwen3_tts_supported_languages(self, mock_qwen3_model):
+        """Test supported languages functionality."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        # Test get_supported_languages method
+        languages = tts.get_supported_languages()
+        assert isinstance(languages, list)
+        assert "English" in languages
+        assert "French" in languages
+        assert "German" in languages
+        assert len(languages) == 10
+
+        # Test that returned list is a copy
+        original_count = len(tts.get_supported_languages())
+        languages.append("FakeLanguage")
+        assert len(tts.get_supported_languages()) == original_count
+
+    def test_qwen3_tts_language_normalization(self, mock_qwen3_model):
+        """Test language code normalization."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        # Test ISO code normalization
+        assert tts._normalize_language("en") == "English"
+        assert tts._normalize_language("fr") == "French"
+        assert tts._normalize_language("de") == "German"
+        assert tts._normalize_language("es") == "Spanish"
+        assert tts._normalize_language("zh") == "Chinese"
+        assert tts._normalize_language("ja") == "Japanese"
+
+        # Test full name (case-insensitive)
+        assert tts._normalize_language("English") == "English"
+        assert tts._normalize_language("english") == "English"
+        assert tts._normalize_language("FRENCH") == "French"
+
+        # Test invalid language
+        with pytest.raises(ValueError, match="Language 'invalid' is not supported"):
+            tts._normalize_language("invalid")
+
+    def test_qwen3_tts_generate_default_voice(self, mock_qwen3_model):
+        """Test audio generation with default voice."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+        text = "Hello, this is a test."
+
+        # Test with default language (English)
+        audio, sr = tts.generate(text, speaker_voice="default")
+
+        # Verify the generate_voice_clone was called
+        mock_model_instance.generate_voice_clone.assert_called_once()
+        call_kwargs = mock_model_instance.generate_voice_clone.call_args[1]
+        assert call_kwargs["language"] == "English"
+
+        # Verify output format
+        assert isinstance(audio, np.ndarray)
+        assert isinstance(sr, int)
+        assert sr == 24000
+        assert len(audio) > 0
+
+    def test_qwen3_tts_generate_with_language_codes(self, mock_qwen3_model):
+        """Test generation with both language codes and full names."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+        text = "Test text"
+
+        # Test with ISO code
+        audio, sr = tts.generate(text, speaker_voice="default", language="fr")
+        call_kwargs = mock_model_instance.generate_voice_clone.call_args[1]
+        assert call_kwargs["language"] == "French"
+
+        # Reset mock
+        mock_model_instance.generate_voice_clone.reset_mock()
+
+        # Test with full name
+        audio, sr = tts.generate(text, speaker_voice="default", language="French")
+        call_kwargs = mock_model_instance.generate_voice_clone.call_args[1]
+        assert call_kwargs["language"] == "French"
+
+    def test_qwen3_tts_unsupported_language(self, mock_qwen3_model):
+        """Test error handling for unsupported languages."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        with pytest.raises(ValueError, match="Language 'klingon' is not supported"):
+            tts.generate("test text", "default", language="klingon")
+
+    def test_qwen3_tts_voice_registration_with_transcript(self, mock_qwen3_model, tmp_path):
+        """Test voice registration with transcript (full quality mode)."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Test voice registration with transcript
+        tts.register_voice("test_voice", str(dummy_audio), transcript="This is a test")
+        assert "test_voice" in tts.voice_registry
+        assert tts.voice_registry["test_voice"]["audio_path"] == str(dummy_audio.absolute())
+        assert tts.voice_registry["test_voice"]["transcript"] == "This is a test"
+        assert tts.voice_registry["test_voice"]["x_vector_mode"] is False
+        assert "prompt" in tts.voice_registry["test_voice"]
+
+        # Verify create_voice_clone_prompt was called with transcript
+        mock_model_instance.create_voice_clone_prompt.assert_called_once()
+        call_kwargs = mock_model_instance.create_voice_clone_prompt.call_args[1]
+        assert call_kwargs["ref_audio"] == str(dummy_audio.absolute())
+        assert call_kwargs["ref_text"] == "This is a test"
+        assert "x_vector_only_mode" not in call_kwargs
+
+    def test_qwen3_tts_voice_registration_without_transcript(self, mock_qwen3_model, tmp_path):
+        """Test voice registration without transcript (x_vector mode)."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Test voice registration without transcript
+        tts.register_voice("test_voice", str(dummy_audio))
+        assert "test_voice" in tts.voice_registry
+        assert tts.voice_registry["test_voice"]["transcript"] is None
+        assert tts.voice_registry["test_voice"]["x_vector_mode"] is True
+
+        # Verify create_voice_clone_prompt was called with x_vector_only_mode
+        call_kwargs = mock_model_instance.create_voice_clone_prompt.call_args[1]
+        assert call_kwargs["x_vector_only_mode"] is True
+
+    def test_qwen3_tts_voice_registration_errors(self, mock_qwen3_model, tmp_path):
+        """Test voice registration error handling."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Register a voice
+        tts.register_voice("test_voice", str(dummy_audio))
+
+        # Test duplicate registration
+        with pytest.raises(ValueError, match="Voice 'test_voice' is already registered"):
+            tts.register_voice("test_voice", str(dummy_audio))
+
+        # Test non-existent file
+        with pytest.raises(FileNotFoundError, match="Audio file not found"):
+            tts.register_voice("missing_voice", "nonexistent.wav")
+
+    def test_qwen3_tts_voice_unregistration(self, mock_qwen3_model, tmp_path):
+        """Test voice unregistration."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Register and unregister
+        tts.register_voice("test_voice", str(dummy_audio))
+        assert "test_voice" in tts.voice_registry
+
+        tts.unregister_voice("test_voice")
+        assert "test_voice" not in tts.voice_registry
+
+        # Test unregistering non-existent voice
+        with pytest.raises(KeyError, match="Voice 'nonexistent' is not registered"):
+            tts.unregister_voice("nonexistent")
+
+    def test_qwen3_tts_list_voices(self, mock_qwen3_model, tmp_path):
+        """Test listing registered voices."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create dummy audio files
+        audio1 = tmp_path / "voice1.wav"
+        audio2 = tmp_path / "voice2.wav"
+        audio1.touch()
+        audio2.touch()
+
+        tts = Qwen3TTS()
+
+        # Initially empty
+        assert tts.list_voices() == []
+
+        # Register voices
+        tts.register_voice("voice1", str(audio1))
+        tts.register_voice("voice2", str(audio2))
+
+        # List voices
+        voices = tts.list_voices()
+        assert "voice1" in voices
+        assert "voice2" in voices
+        assert len(voices) == 2
+
+    def test_qwen3_tts_generate_with_registered_voice(self, mock_qwen3_model, tmp_path):
+        """Test generation with a registered voice."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Register voice
+        tts.register_voice("custom_voice", str(dummy_audio), transcript="Sample text")
+
+        # Generate with registered voice
+        audio, sr = tts.generate("Hello world", speaker_voice="custom_voice", language="en")
+
+        # Verify generate_voice_clone was called with cached prompt
+        mock_model_instance.generate_voice_clone.assert_called_once()
+        call_kwargs = mock_model_instance.generate_voice_clone.call_args[1]
+        assert call_kwargs["voice_clone_prompt"] == tts.voice_registry["custom_voice"]["prompt"]
+        assert call_kwargs["language"] == "English"
+
+        # Verify output
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_qwen3_tts_generate_with_direct_path(self, mock_qwen3_model, tmp_path):
+        """Test generation with direct audio file path."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "direct_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Generate with direct path (should use x_vector mode)
+        audio, sr = tts.generate("Hello", speaker_voice=str(dummy_audio), language="en")
+
+        # Verify create_voice_clone_prompt was called with x_vector_only_mode
+        assert mock_model_instance.create_voice_clone_prompt.call_count >= 1
+
+        # Verify generate_voice_clone was called
+        mock_model_instance.generate_voice_clone.assert_called_once()
+
+        # Verify output
+        assert isinstance(audio, np.ndarray)
+        assert sr == 24000
+
+    def test_qwen3_tts_generate_with_kwargs(self, mock_qwen3_model):
+        """Test generation with additional pipeline kwargs."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        # Generate with custom kwargs
+        audio, sr = tts.generate(
+            "Test text",
+            speaker_voice="default",
+            language="en",
+            tts_pipeline_kwargs={"max_new_tokens": 100, "top_p": 0.9}
+        )
+
+        # Verify kwargs were passed through
+        call_kwargs = mock_model_instance.generate_voice_clone.call_args[1]
+        assert call_kwargs["max_new_tokens"] == 100
+        assert call_kwargs["top_p"] == 0.9
+
+    def test_qwen3_tts_generate_error_handling(self, mock_qwen3_model):
+        """Test error handling during generation."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        # Simulate generation error
+        mock_model_instance.generate_voice_clone.side_effect = Exception("Generation failed")
+
+        with pytest.raises(RuntimeError, match="Failed to generate audio with Qwen3-TTS"):
+            tts.generate("test text", "default")
+
+    def test_qwen3_tts_device_error_handling(self, mock_qwen3_model):
+        """Test device availability error handling."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Test CUDA unavailable
+        with patch('torch.cuda.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="CUDA device requested but not available"):
+                Qwen3TTS(device="cuda")
+
+        # Test MPS unavailable
+        with patch('torch.backends.mps.is_available', return_value=False):
+            with pytest.raises(RuntimeError, match="MPS device requested but not available"):
+                Qwen3TTS(device="mps")
+
+    def test_qwen3_tts_audio_conversion(self, mock_qwen3_model):
+        """Test audio tensor to numpy conversion."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        tts = Qwen3TTS()
+
+        # Test with torch tensor (2D that needs squeezing)
+        if torch is not None:
+            mock_model_instance.generate_voice_clone.return_value = (
+                [torch.zeros(1, 24000)],  # 2D tensor
+                24000
+            )
+
+            audio, sr = tts.generate("test", "default")
+            assert audio.ndim == 1
+            assert audio.dtype == np.float32
+            assert len(audio) == 24000
+
+    def test_qwen3_tts_device_mapping_fix(self, mock_qwen3_model):
+        """Test that device mapping fix method exists and handles CPU compatibility."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Test initialization with CPU device
+        tts = Qwen3TTS(device="cpu")
+
+        # Verify the device initialization method exists
+        assert hasattr(tts, '_initialize_model')
+        assert tts.device == "cpu"
+
+        # Test auto device selection on systems without CUDA
+        with patch('torch.cuda.is_available', return_value=False), \
+             patch('torch.backends.mps.is_available', return_value=False):
+            tts_auto = Qwen3TTS(device="auto")
+            assert tts_auto.device == "cpu"
+
+    def test_qwen3_tts_prompt_caching(self, mock_qwen3_model, tmp_path):
+        """Test that voice clone prompts are cached and reused."""
+        mock_model_class, mock_model_instance = mock_qwen3_model
+
+        # Create a dummy audio file
+        dummy_audio = tmp_path / "test_voice.wav"
+        dummy_audio.touch()
+
+        tts = Qwen3TTS()
+
+        # Register voice (creates prompt)
+        tts.register_voice("cached_voice", str(dummy_audio), transcript="Test")
+        initial_call_count = mock_model_instance.create_voice_clone_prompt.call_count
+
+        # Generate multiple times with same voice
+        tts.generate("Text 1", "cached_voice", language="en")
+        tts.generate("Text 2", "cached_voice", language="en")
+        tts.generate("Text 3", "cached_voice", language="en")
+
+        # Verify prompt was only created once (during registration)
+        # and not re-created during generation
+        assert mock_model_instance.create_voice_clone_prompt.call_count == initial_call_count

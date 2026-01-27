@@ -19,15 +19,15 @@ Installation:
 Author: Thomas Schaaf <thomas.schaaf@ieee.org>
 """
 
-from pathlib import Path
 
-# Try to import the TTS classes
+# Try to import the TTS classes and HuggingfaceVoiceDatabase
 try:
     from sdialog.audio.tts import ChatterboxTTS, ChatterboxMultilingualTTS
-    print("✓ Successfully imported Chatterbox TTS classes")
+    from sdialog.audio.voice_database import HuggingfaceVoiceDatabase
+    print("✓ Successfully imported Chatterbox TTS classes and HuggingfaceVoiceDatabase")
 except ImportError as e:
-    print(f"✗ Failed to import TTS classes: {e}")
-    print("Make sure you have installed: pip install chatterbox-tts")
+    print(f"✗ Failed to import TTS classes or voice database: {e}")
+    print("Make sure you have installed: pip install chatterbox-tts sdialog[audio] datasets")
     exit(1)
 
 # Try to import audio saving functionality
@@ -89,38 +89,35 @@ def demonstrate_multilingual_tts():
             except Exception as e:
                 print(f"✗ Generation error: {e}")
 
-        # Demonstrate voice registration
-        print("🎤 Voice registration demo...")
-
-        # Create a dummy audio file for demonstration
-        dummy_voice_path = Path("demo_voice.wav")
-        if not dummy_voice_path.exists():
-            print("ℹ️  Creating dummy voice file for demo...")
-            # In reality, this would be a real audio file
-            dummy_voice_path.touch()
-
+        # Demonstrate voice registration using HuggingfaceVoiceDatabase
+        print("🎤 Voice registration demo using HuggingfaceVoiceDatabase...")
         try:
-            # Register a custom voice
-            tts.register_voice("demo_speaker", str(dummy_voice_path))
-            print("✓ Registered voice: demo_speaker")
+            # Initialize the Huggingface voice database (voices-libritts)
+            voice_db = HuggingfaceVoiceDatabase("sdialog/voices-libritts")
+            voice_db.populate()
+            # Sample a voice (e.g., English, any gender/age)
+            voice = voice_db.sample(language="english")
+            print(f"✓ Sampled voice from voices-libritts: {voice.identifier} ({voice.gender}, {voice.age})")
+            print(f"  Audio path: {voice.voice}")
+
+            # Register the sampled voice with the TTS engine
+            tts.register_voice("libritts_speaker", voice.voice)
+            print("✓ Registered voice: libritts_speaker")
             print(f"📋 Available voices: {tts.list_voices()}")
 
             # Use the registered voice
             audio, sr = tts.generate(
-                text="This uses a cloned voice across languages",
-                speaker_voice="demo_speaker",
+                text="This uses a cloned voice from voices-libritts across languages",
+                speaker_voice="libritts_speaker",
                 language="en"
             )
-            print("✓ Generated speech with registered voice")
+            print("✓ Generated speech with registered libritts voice")
 
             # Clean up
-            tts.unregister_voice("demo_speaker")
-            dummy_voice_path.unlink()
+            tts.unregister_voice("libritts_speaker")
 
         except Exception as e:
-            print(f"✗ Voice registration error: {e}")
-            if dummy_voice_path.exists():
-                dummy_voice_path.unlink()
+            print(f"✗ Voice registration error (HuggingfaceVoiceDatabase): {e}")
 
         # Test unsupported language
         print("🚫 Testing unsupported language...")
@@ -191,7 +188,7 @@ def compare_with_standard_tts():
 def main():
     """Main demonstration function."""
     print("ChatterboxMultilingualTTS Example")
-    print("Author: Thomas Schaaf <thomas.schaaf@idiap.ch>")
+    print("Author: Thomas Schaaf <thomas.schaaf@ieee.org>")
 
     try:
         # Run the multilingual demo

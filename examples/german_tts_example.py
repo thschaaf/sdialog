@@ -4,7 +4,7 @@ Basic German audio generation example using ChatterboxMultilingualTTS.
 
 This simple script demonstrates generating German speech using the multilingual TTS.
 
-Author: Thomas Schaaf <thomas.schaaf@idiap.ch>
+Author: Thomas Schaaf <thomas.schaaf@ieee.org>
 """
 
 try:
