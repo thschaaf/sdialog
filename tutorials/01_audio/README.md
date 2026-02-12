@@ -38,3 +38,18 @@ Explore how different room configurations and acoustic properties affect the fin
 
 ### 7. Impulse Response Simulation (`7.impulse_response.ipynb`)
 This notebook covers the final step in the audio pipeline: simulating recording devices. You will learn how to apply microphone impulse responses to the audio to make it sound as if it were recorded on different devices, such as a phone or a high-quality microphone.
+
+### 8. Audio Evaluation (`8.evaluation.ipynb`)
+Learn how to evaluate the quality of generated audio dialogues. This tutorial covers:
+- Audio quality metrics (SNR, PESQ, STOI)
+- Speaker consistency evaluation
+- Speech analytics and speech signal evaluation
+
+### 9. IndexTTS (`9.IndexTTS.ipynb`)
+This tutorial demonstrates how to use the IndexTTS engine for bilingual (Chinese and English) text-to-speech synthesis with automatic language detection.
+
+### 10. Overlaps and Pauses (`10.overlaps_and_pauses.ipynb`)
+Learn how to add realistic overlaps and pauses between turns in a dialogue using LLM-based gap computation. This creates more natural conversational flow.
+
+### 11. Sound Effects (`11.sound_effects.ipynb`)
+This tutorial demonstrates how to automatically annotate and add sound effects to your dialogues using LLM-based tag annotation and the dSCAPER integration.

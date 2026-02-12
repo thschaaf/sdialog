@@ -10,6 +10,8 @@ for room acoustics simulation and audio processing workflows.
 # SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>
 # SPDX-License-Identifier: MIT
 import numpy as np
+import soundfile as sf
+from typing import List, Dict, Any
 
 from sdialog import Turn
 
@@ -66,6 +68,9 @@ class AudioTurn(Turn):
     :vartype microphone_position: str
     :ivar is_stored_in_dscaper: Flag indicating integration with dscaper tool.
     :vartype is_stored_in_dscaper: bool
+    :ivar gap_duration: Time interval between this turn and the next.
+                        Positive for pause, negative for overlap, 0 for contiguous turns.
+    :vartype gap_duration: float
     """
 
     _audio: np.ndarray = None
@@ -78,6 +83,9 @@ class AudioTurn(Turn):
     position: str = ""
     microphone_position: str = ""
     is_stored_in_dscaper: bool = False
+    gap_duration: float = 0.0
+    text_with_tags: str = ""
+    sound_effects: List[Dict[str, Any]] = []
 
     def get_audio(self) -> np.ndarray:
         """
@@ -91,6 +99,8 @@ class AudioTurn(Turn):
         :rtype: np.ndarray
         :raises AttributeError: If no audio data has been set for this turn.
         """
+        if self._audio is None and self.audio_path != "":
+            self._audio, self.sampling_rate = sf.read(self.audio_path)
         return self._audio
 
     def set_audio(self, audio: np.ndarray, sampling_rate: int):

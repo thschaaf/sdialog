@@ -4,10 +4,11 @@
 
 import torch
 import numpy as np
-from typing import Dict
+from typing import Dict, Optional, List
 from pathlib import Path
 
 from ..base import BaseTTS
+from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 
 class ChatterboxTTS(BaseTTS):
@@ -42,7 +43,12 @@ class ChatterboxTTS(BaseTTS):
     :vartype voice_registry: Dict[str, str]
     """
 
-    def __init__(self, device: str = "auto", engine_type: str = "turbo"):
+    def __init__(
+        self,
+        device: str = "auto",
+        engine_type: str = "turbo",
+        text_normalizers: Optional[List[TextNormalizer]] = None
+    ):
         """
         Initialize the Chatterbox TTS engine.
 
@@ -54,10 +60,13 @@ class ChatterboxTTS(BaseTTS):
         :type device: str
         :param engine_type: Type of Chatterbox engine to use ("standard" or "turbo").
         :type engine_type: str
+        :param text_normalizers: The list of text normalizers to apply before generation.
+        :type text_normalizers: list[TextNormalizer]
         :raises ImportError: If the required Chatterbox package is not installed.
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
+        self.text_normalizers = text_normalizers
 
         try:
             if engine_type == "turbo":
@@ -193,6 +202,10 @@ class ChatterboxTTS(BaseTTS):
         :rtype: tuple[np.ndarray, int]
         :raises RuntimeError: If audio generation fails.
         """
+        # Normalize the text if text normalizers are provided
+        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+            text = normalize_text(text, self.text_normalizers)
+
         try:
             # Check if speaker_voice is a registered voice name
             if speaker_voice in self.voice_registry:

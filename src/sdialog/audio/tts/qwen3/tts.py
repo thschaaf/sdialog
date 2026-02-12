@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from ..base import BaseTTS
+from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,8 @@ class Qwen3TTS(BaseTTS):
         device: str = "auto",
         model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         dtype: str = "bfloat16",
-        use_flash_attention: str = "auto"
+        use_flash_attention: str = "auto",
+        text_normalizers: Optional[list[TextNormalizer]] = None
     ):
         """
         Initialize the Qwen3-TTS engine.
@@ -139,10 +141,13 @@ class Qwen3TTS(BaseTTS):
         :type dtype: str
         :param use_flash_attention: Flash Attention 2 setting ("auto", True, or False).
         :type use_flash_attention: str or bool
+        :param text_normalizers: The list of text normalizers to apply before generation.
+        :type text_normalizers: list[TextNormalizer]
         :raises ImportError: If the required qwen-tts package is not installed.
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
+        self.text_normalizers = text_normalizers
 
         try:
             from qwen_tts import Qwen3TTSModel
@@ -475,6 +480,10 @@ class Qwen3TTS(BaseTTS):
         :raises ValueError: If the language is not supported.
         :raises RuntimeError: If audio generation fails.
         """
+        # Normalize the text if text normalizers are provided
+        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+            text = normalize_text(text, self.text_normalizers)
+
         # Normalize and validate language
         try:
             normalized_language = self._normalize_language(language)

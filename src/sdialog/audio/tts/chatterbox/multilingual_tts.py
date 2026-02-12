@@ -5,10 +5,11 @@
 import torch
 import numpy as np
 import logging
-from typing import Dict
+from typing import Dict, Optional, List
 from pathlib import Path
 
 from ..base import BaseTTS
+from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class ChatterboxMultilingualTTS(BaseTTS):
     :vartype supported_languages: list[str]
     """
 
-    def __init__(self, device: str = "auto"):
+    def __init__(self, device: str = "auto", text_normalizers: Optional[List[TextNormalizer]] = None):
         """
         Initialize the Chatterbox Multilingual TTS engine.
 
@@ -67,10 +68,13 @@ class ChatterboxMultilingualTTS(BaseTTS):
 
         :param device: Device to run the model on ("auto", "cpu", "cuda", or "mps").
         :type device: str
+        :param text_normalizers: The list of text normalizers to apply before generation.
+        :type text_normalizers: list[TextNormalizer]
         :raises ImportError: If the required Chatterbox package is not installed.
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
+        self.text_normalizers = text_normalizers
 
         try:
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS as ChatterboxModel
@@ -296,6 +300,10 @@ class ChatterboxMultilingualTTS(BaseTTS):
                 f"Language '{language}' not supported. "
                 f"Supported languages: {self.supported_languages}"
             )
+
+        # Normalize the text if text normalizers are provided
+        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+            text = normalize_text(text, self.text_normalizers)
 
         try:
             # Add language_id parameter (Chatterbox API uses language_id, not language)

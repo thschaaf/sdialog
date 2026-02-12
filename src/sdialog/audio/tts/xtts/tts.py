@@ -8,6 +8,7 @@ from typing import Dict, Optional
 from pathlib import Path
 
 from ..base import BaseTTS
+from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 
 class XttsTTS(BaseTTS):
@@ -47,7 +48,8 @@ class XttsTTS(BaseTTS):
         self,
         device: str = "auto",
         model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2",
-        default_language: str = "en"
+        default_language: str = "en",
+        text_normalizers: Optional[list[TextNormalizer]] = None
     ):
         """
         Initialize the XTTS TTS engine.
@@ -62,10 +64,13 @@ class XttsTTS(BaseTTS):
         :type model_name: str
         :param default_language: Default language code for generation (e.g., "en", "es", "fr").
         :type default_language: str
+        :param text_normalizers: The list of text normalizers to apply before generation.
+        :type text_normalizers: list[TextNormalizer]
         :raises ImportError: If the required TTS package is not installed.
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
+        self.text_normalizers = text_normalizers
 
         try:
             from TTS.api import TTS
@@ -210,6 +215,10 @@ class XttsTTS(BaseTTS):
         :raises RuntimeError: If audio generation fails.
         :raises ValueError: If no speaker voice is provided for cloning models.
         """
+        # Normalize the text if text normalizers are provided
+        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+            text = normalize_text(text, self.text_normalizers)
+
         try:
             # Use provided language or fall back to default
             lang = language or self.default_language

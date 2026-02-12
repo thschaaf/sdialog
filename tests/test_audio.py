@@ -755,44 +755,63 @@ def test_audio_pipeline_initialization(mock_dependencies):
 
 
 def test_audio_pipeline_inference_step1(mock_dependencies, audio_dialog_instance, tmp_path):
-    """Tests that inference correctly calls step 1 functions."""
+    """Tests that inference correctly calls step 1 functions (TTS generation)."""
+    import soundfile as sf
+
     pipeline = AudioPipeline(dir_audio=str(tmp_path), impulse_response_database=mock_dependencies["ir_db"])
 
     # Manually create the directory structure that the pipeline expects to exist.
     dialog_dir = tmp_path / f"dialog_{audio_dialog_instance.id}"
     (dialog_dir / "exported_audios").mkdir(parents=True)
+    audio_dialog_instance.audio_dir_path = str(tmp_path)
     audio_dialog_instance.audio_step_1_filepath = str(dialog_dir / "exported_audios" / "audio_pipeline_step1.wav")
+    audio_dialog_instance.audio_step_2_filepath = str(dialog_dir / "exported_audios" / "audio_pipeline_step2.wav")
 
     # Prepare a dialog with mock audio data for the mock's return value
     dialog_with_audio = audio_dialog_instance
-    for turn in dialog_with_audio.turns:
-        turn.set_audio(np.zeros(10), 16000)
+    for i, turn in enumerate(dialog_with_audio.turns):
+        audio_data = np.zeros(24000)  # 1 second of audio at 24kHz
+        turn.set_audio(audio_data, 24000)
+        turn.audio_duration = 1.0  # Set duration for dscaper
+        turn.audio_start_time = float(i)  # Set start time
+        # Create actual audio file for dscaper
+        audio_file = dialog_dir / "exported_audios" / f"turn_{i}.wav"
+        sf.write(str(audio_file), audio_data, 24000)
+        turn.audio_path = str(audio_file)
 
     mock_dependencies["gen_utt"].return_value = dialog_with_audio
 
+    # The new pipeline always runs dscaper after TTS, so we verify TTS calls are made
+    # Mocking the dscaper calls is complex, so we just check the TTS part
     pipeline.inference(audio_dialog_instance)
 
+    # Verify TTS generation functions were called
     mock_dependencies["gen_utt"].assert_called_once()
     mock_dependencies["save_utt"].assert_called_once()
 
 
 def test_audio_pipeline_inference_resampling(mock_dependencies, audio_dialog_instance, tmp_path):
-    """Tests that resampling is called when specified."""
+    """Tests that sampling_rate is configured via constructor parameter."""
     step1_file = tmp_path / "step1.wav"
     step1_file.touch()
     audio_dialog_instance.audio_step_1_filepath = str(step1_file)
 
-    pipeline = AudioPipeline(dir_audio=str(tmp_path), impulse_response_database=mock_dependencies["ir_db"])
-    pipeline.inference(audio_dialog_instance, perform_tts=False, re_sampling_rate=16000)
+    # The sampling_rate is now set in the constructor, not in inference()
+    pipeline = AudioPipeline(
+        dir_audio=str(tmp_path),
+        impulse_response_database=mock_dependencies["ir_db"],
+        sampling_rate=16000
+    )
 
-    # This is a bit indirect. We check if librosa.resample was called.
-    # The mocks need to be set up for this to be reachable.
-    # For now, let's assume the logic inside inference is correct if step 1 is skipped
-    # A more detailed test would mock the os.path.exists and sf.write calls.
-    # Given the complexity, we'll check that it *doesn't* get called when not requested.
+    # Verify the sampling_rate was set correctly
+    assert pipeline.sampling_rate == 16000
 
-    pipeline.inference(audio_dialog_instance, perform_tts=False)
-    mock_dependencies["librosa"].resample.assert_not_called()
+    # Test with default sampling rate
+    pipeline_default = AudioPipeline(
+        dir_audio=str(tmp_path),
+        impulse_response_database=mock_dependencies["ir_db"]
+    )
+    assert pipeline_default.sampling_rate == 24000  # Default value
 
 
 def test_to_audio_wrapper_errors(mock_dependencies):
@@ -802,18 +821,23 @@ def test_to_audio_wrapper_errors(mock_dependencies):
         to_audio(dialog, room_name="test", perform_room_acoustics=False)
 
 
-def test_audio_pipeline_master_audio(audio_dialog_instance, mock_dependencies):
-    """Tests the master_audio concatenation logic."""
-    # Give each turn some dummy audio
-    audio_chunk = np.ones(10)
-    for turn in audio_dialog_instance.turns:
-        turn.set_audio(audio_chunk, 16000)
+def test_audio_dialog_get_dry_audio(audio_dialog_instance, tmp_path):
+    """Tests the get_dry_audio method which replaced master_audio."""
+    import soundfile as sf
 
-    pipeline = AudioPipeline(impulse_response_database=mock_dependencies["ir_db"])
-    mastered = pipeline.master_audio(audio_dialog_instance)
+    # Create a test audio file for step 2
+    audio_chunk = np.ones(30)
+    step2_file = tmp_path / "step2.wav"
+    sf.write(str(step2_file), audio_chunk, 16000)
 
-    assert len(mastered) == len(audio_chunk) * len(audio_dialog_instance.turns)
-    assert np.array_equal(mastered, np.concatenate([audio_chunk, audio_chunk, audio_chunk]))
+    audio_dialog_instance.audio_step_2_filepath = str(step2_file)
+
+    # Test get_dry_audio reads from step 2 file
+    dry_audio = audio_dialog_instance.get_dry_audio()
+
+    assert len(dry_audio) == len(audio_chunk)
+    # Use a tolerance due to WAV file encoding precision
+    assert np.allclose(dry_audio, audio_chunk, rtol=1e-3)
 
 
 # Tests for dscaper_utils
@@ -854,6 +878,8 @@ def test_send_utterances_to_dscaper(mock_dscaper, dscaper_dialog):
 
 def test_generate_dscaper_timeline(mock_dscaper, dscaper_dialog, tmp_path):
     """Tests the generation of a dscaper timeline."""
+    import soundfile as sf
+
     # Set up the base path for the mock dscaper
     mock_dscaper.get_dscaper_base_path.return_value = str(tmp_path)
 
@@ -866,9 +892,10 @@ def test_generate_dscaper_timeline(mock_dscaper, dscaper_dialog, tmp_path):
     # This simulates the real dscaper behavior more accurately.
     def create_mock_files(*args, **kwargs):
         soundscape_positions_path.mkdir(parents=True, exist_ok=True)
-        soundscape_wav_path.touch()
-        # Also create the source file it will look for
-        (soundscape_positions_path / "speaker_1.wav").touch()
+        # Create actual WAV files instead of empty files (new code reads them with soundfile)
+        dummy_audio = np.zeros(24000)  # 1 second of silence
+        sf.write(str(soundscape_wav_path), dummy_audio, 24000)
+        sf.write(str(soundscape_positions_path / "speaker_1.wav"), dummy_audio, 24000)
         # Return the original mock's response
         return MagicMock(status="success", content={"id": "test_id"})
 

@@ -7,6 +7,28 @@ All notable changes to SDialog will be documented here.
 ## [Unreleased]
 
 ### Added
+- **sdialog.audio.evaluation**: New audio evaluation framework (merged from qanastek/sdialog)
+  - Audio quality evaluation (SNR, PESQ, STOI metrics)
+  - Speaker consistency evaluation
+  - Speech analytics evaluation
+  - Speech signal evaluation
+- **sdialog.audio.normalizers**: Text normalization utilities for TTS
+  - LowercaseNormalizer, StageNormalizer, ReplaceCommaWithDotNormalizer, WhisperNormalizer
+- **sdialog.audio**: Sound effects annotation and integration via LLM
+  - `add_sound_effects()` method for automatic sound effect placement
+  - `compute_overlapping_and_pausing_llm()` for realistic turn timing
+- **sdialog.audio.tts**: Text normalizers support added to Kokoro, Index, and HuggingFace TTS
+- **sdialog.audio.tts**: IndexTTS v2 support via `version` parameter
+- **tutorials**: 4 new audio tutorials (evaluation, IndexTTS, overlaps/pauses, sound effects)
+
+### Changed
+- **sdialog.audio.dialog**: Added `RoomAcousticsConfig` class (Pydantic model) for room acoustics configuration
+- **sdialog.audio.dialog**: `audio_step_3_filepaths` now uses `RoomAcousticsConfig` objects instead of dictionaries
+- **sdialog.audio.dialog**: Added `get_dry_audio()` method (replaces `master_audio()`)
+- **sdialog.audio.pipeline**: Removed `re_sampling_rate` parameter (use `sampling_rate` in constructor instead)
+- **sdialog.audio.turn**: Added `gap_duration`, `text_with_tags`, and `sound_effects` attributes
+- **requirements-audio.txt**: Updated dscaper requirement to >=1.7.4
+
 - **sdialog.audio.tts**: Qwen3-TTS integration for rapid multilingual voice cloning
   - Support for 10 major languages (Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian)
   - 3-second rapid voice cloning from reference audio

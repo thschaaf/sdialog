@@ -44,10 +44,10 @@ Example:
 # SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>
 # SPDX-License-Identifier: MIT
 import os
+import json
 import dscaper
 import librosa
 import logging
-import numpy as np
 from tqdm import tqdm
 import soundfile as sf
 from datasets import load_dataset
@@ -63,7 +63,14 @@ from sdialog.audio.room import Room, RoomPosition, DirectivityType
 from sdialog.audio.voice_database import BaseVoiceDatabase, HuggingfaceVoiceDatabase, Voice
 from sdialog.audio import generate_utterances_audios, generate_audio_room_accoustic
 from sdialog.audio.impulse_response_database import ImpulseResponseDatabase, RecordingDevice
-from sdialog.audio.utils import Role, SourceType, SourceVolume, SpeakerSide, default_dscaper_datasets
+from sdialog.audio.utils import (
+    Role,
+    SourceType,
+    SourceVolume,
+    SpeakerSide,
+    default_dscaper_datasets,
+    default_sound_effects_datasets
+)
 
 
 def to_audio(
@@ -85,11 +92,15 @@ def to_audio(
     source_volumes: Optional[dict[SourceType, SourceVolume]] = None,
     audio_file_format: Optional[str] = "wav",
     seed: Optional[int] = None,
-    re_sampling_rate: Optional[int] = None,
     recording_devices: Optional[List[Union[RecordingDevice, str]]] = None,
     impulse_response_database: Optional[ImpulseResponseDatabase] = None,
     override_tts_audio: Optional[bool] = True,
-    verbose: Optional[bool] = False
+    verbose: Optional[bool] = False,
+    voices: Optional[dict[Role, Union[Voice, tuple[str, str]]]] = None,
+    overlap_pauses: Optional[bool] = False,
+    add_sound_effects: Optional[bool] = False,
+    sound_effects_datasets: Optional[List[str]] = None,
+    sound_effects_dropout: Optional[float] = 0.0
 ) -> AudioDialog:
     """
     Convert a dialogue into an audio dialogue with comprehensive audio processing.
@@ -138,8 +149,6 @@ def to_audio(
     :type audio_file_format: str
     :param seed: Seed for random number generator.
     :type seed: int
-    :param re_sampling_rate: Re-sampling rate for the output audio.
-    :type re_sampling_rate: Optional[int]
     :param recording_devices: The identifiers of the recording devices to simulate.
     :type recording_devices: Optional[List[Union[RecordingDevice, str]]]
     :param impulse_response_database: The database for impulse responses.
@@ -148,6 +157,14 @@ def to_audio(
     :type override_tts_audio: Optional[bool]
     :param verbose: Verbose mode for logging.
     :type verbose: Optional[bool]
+    :param overlap_pauses: Generate the audio with overlapping and pausing between turns using LLM.
+    :type overlap_pauses: Optional[bool]
+    :param add_sound_effects: Add sound effects (such as door opening, footsteps, etc.) to the audio.
+    :type add_sound_effects: Optional[bool]
+    :param sound_effects_datasets: List of Hugging Face datasets for sound effects.
+    :type sound_effects_datasets: Optional[List[str]]
+    :param sound_effects_dropout: Dropout rate for sound effects.
+    :type sound_effects_dropout: Optional[float]
     :return: Audio dialogue with processed audio data.
     :rtype: AudioDialog
     """
@@ -228,6 +245,13 @@ def to_audio(
         ):
             _audio_pipeline.populate_dscaper(dscaper_datasets)
 
+        if (
+            add_sound_effects
+            and sound_effects_datasets is not None
+            and sound_effects_datasets != default_sound_effects_datasets()
+        ):
+            _audio_pipeline.populate_dscaper(sound_effects_datasets, prefix="sfx")
+
         if perform_room_acoustics:
 
             # Place the speakers around the furnitures in the room
@@ -263,10 +287,13 @@ def to_audio(
             room_name=room_name,
             audio_file_format=audio_file_format,
             seed=seed,
-            re_sampling_rate=re_sampling_rate,
             recording_devices=recording_devices,
             override_tts_audio=override_tts_audio,
-            verbose=verbose
+            verbose=verbose,
+            voices=voices,
+            overlap_pauses=overlap_pauses,
+            add_sound_effects=add_sound_effects,
+            sound_effects_dropout=sound_effects_dropout
         )
 
     finally:
@@ -372,11 +399,13 @@ class AudioPipeline:
 
         # Populate the dSCAPER with the default datasets
         self.populate_dscaper(default_dscaper_datasets())
+        self.populate_dscaper(default_sound_effects_datasets(), prefix="sfx")
 
     def populate_dscaper(
             self,
             datasets: List[str],
-            split: str = "train") -> dict:
+            split: str = "train",
+            prefix: str = "") -> dict:
         """
         Populate the dSCAPER with audio recordings from Hugging Face datasets.
 
@@ -404,21 +433,32 @@ class AudioPipeline:
             # Load huggingface dataset
             dataset = load_dataset(dataset_name, split=split)
 
+            print(dataset)
+
             for data in tqdm(
                 dataset,
                 desc=f"Populating dSCAPER with {dataset_name} dataset...",
                 leave=False
             ):
 
+                # Get the filename
                 filename = data["audio"]["path"].split("/")[-1]
-                label_str = dataset.features["label"].names[data["label"]]
+                label_str = data["label"]
 
                 # WARNING: Create a name for the "library" based
                 # on the dataset name minus the organization name
+                short_ds_name = dataset_name.split("/")[-1]
                 metadata = DscaperAudio(
-                    library=dataset_name.split("/")[-1],
+                    library=(
+                        f"{prefix}|{short_ds_name}"
+                        if prefix != ""
+                        else short_ds_name
+                    ),
                     label=label_str,
-                    filename=filename
+                    filename=filename,
+                    sandbox=json.dumps({
+                        "description": data.get("description", "")
+                    })
                 )
 
                 # Try to store the audio using the dSCAPER API
@@ -444,23 +484,6 @@ class AudioPipeline:
             "count_success_audio_files": count_success_audio_files
         }
 
-    def master_audio(
-            self,
-            dialog: AudioDialog) -> np.ndarray:
-        """
-        Combine multiple audio segments into a single master audio track.
-
-        Concatenates all audio segments from the dialogue turns into a single
-        continuous audio track. This creates a baseline audio representation
-        of the entire dialogue for further processing and analysis.
-
-        :param dialog: Audio dialogue containing turns with audio data.
-        :type dialog: AudioDialog
-        :return: Combined audio data as numpy array.
-        :rtype: np.ndarray
-        """
-        return np.concatenate([turn.get_audio() for turn in dialog.turns])
-
     def inference(
         self,
         dialog: Dialog,
@@ -473,11 +496,13 @@ class AudioPipeline:
         keep_duplicate: bool = True,
         audio_file_format: str = "wav",
         seed: int = None,
-        re_sampling_rate: Optional[int] = None,
         recording_devices: Optional[List[Union[RecordingDevice, str]]] = None,
         tts_pipeline_kwargs: Optional[dict] = {},
         override_tts_audio: Optional[bool] = True,
-        verbose: Optional[bool] = False
+        verbose: Optional[bool] = False,
+        overlap_pauses: Optional[bool] = False,
+        add_sound_effects: Optional[bool] = False,
+        sound_effects_dropout: Optional[float] = 0.0
     ) -> AudioDialog:
         """
         Execute the complete audio generation pipeline.
@@ -507,8 +532,6 @@ class AudioPipeline:
         :type audio_file_format: str
         :param seed: Seed for random number generator.
         :type seed: int
-        :param re_sampling_rate: Re-sampling rate for the output audio.
-        :type re_sampling_rate: Optional[int]
         :param recording_devices: The identifiers of the recording devices to simulate.
         :type recording_devices: Optional[List[Union[RecordingDevice, str]]]
         :param tts_pipeline_kwargs: Additional keyword arguments to be passed to the TTS pipeline.
@@ -517,6 +540,12 @@ class AudioPipeline:
         :type override_tts_audio: Optional[bool]
         :param verbose: Verbose mode for logging.
         :type verbose: Optional[bool]
+        :param overlap_pauses: Generate the audio with overlapping and pausing between turns using LLM.
+        :type overlap_pauses: Optional[bool]
+        :param add_sound_effects: Add sound effects (such as door opening, footsteps, etc.) to the audio.
+        :type add_sound_effects: Optional[bool]
+        :param sound_effects_dropout: Dropout rate for sound effects.
+        :type sound_effects_dropout: Optional[float]
         :return: Processed audio dialogue with all audio data.
         :rtype: AudioDialog
 
@@ -606,6 +635,10 @@ class AudioPipeline:
                     "starting from scratch..."
                 )
 
+            #########################################################
+            # Step 1: Generate the utterances audios using the TTS
+            #########################################################
+
             if (not os.path.exists(dialog.audio_step_1_filepath) or override_tts_audio) and perform_tts:
 
                 logger.info(f"[Step 1] Generating audio recordings from the utterances of the dialogue: {dialog.id}")
@@ -619,7 +652,31 @@ class AudioPipeline:
                     seed=seed,
                     sampling_rate=self.sampling_rate,
                     tts_pipeline_kwargs=tts_pipeline_kwargs,
+                    remove_silences=overlap_pauses
                 )
+
+                # Compute the overlapping and pausing between turns using LLM
+                if overlap_pauses:
+                    dialog.compute_overlapping_and_pausing_llm(verbose=verbose)
+
+                if add_sound_effects:
+
+                    from sdialog.audio.dscaper_utils import get_sound_effects_db
+
+                    # Fetch the list of available sound effects from dscaper
+                    _available_sound_effects = get_sound_effects_db(dscaper_manager=self._dscaper)
+                    print(_available_sound_effects)
+
+                    dialog.add_sound_effects(
+                        room=room,
+                        dscaper_manager=self._dscaper,
+                        available_sound_effects=_available_sound_effects,
+                        dropout=sound_effects_dropout
+                    )
+
+                # Ensure that the turn timings are updated after the overlapping
+                # and pausing between turns are computed
+                dialog.update_turn_timings()
 
                 # Save the utterances audios to the project path
                 dialog.save_utterances_audios(
@@ -627,96 +684,57 @@ class AudioPipeline:
                     project_path=os.path.join(dialog.audio_dir_path, dialog_directory)
                 )
 
-                # Combine the audio segments into a single master audio track as a baseline
-                dialog.set_combined_audio(
-                    self.master_audio(dialog)
-                )
+            #########################################################
+            # Step 2: Generate the timeline from dSCAPER
+            #########################################################
 
-                # Save the combined audio to exported_audios folder
-                sf.write(
-                    dialog.audio_step_1_filepath,
-                    dialog.get_combined_audio(),
-                    self.sampling_rate
-                )
-                logger.info(f"[Step 1] Audio files have been saved here: {dialog.audio_step_1_filepath}")
+            from sdialog.audio.dscaper_utils import (
+                send_utterances_to_dscaper,
+                generate_dscaper_timeline
+            )
 
-                # If the user want to re-sample the output audio to a different sampling rate
-                if re_sampling_rate is not None and os.path.exists(dialog.audio_step_1_filepath):
+            logger.info("[Step 2] Sending utterances to dSCAPER...")
 
-                    logger.info(f"[Step 1] Re-sampling audio to {re_sampling_rate} Hz...")
+            # Send the utterances to dSCAPER
+            dialog: AudioDialog = send_utterances_to_dscaper(
+                dialog,
+                self._dscaper,
+                dialog_directory=dialog_directory
+            )
 
-                    y_resampled = librosa.resample(
-                        y=dialog.get_combined_audio().T,
-                        orig_sr=self.sampling_rate,
-                        target_sr=re_sampling_rate
-                    )
+            # Generate the timeline from dSCAPER
+            logger.info("[Step 2] Generating timeline from dSCAPER...")
+            dialog: AudioDialog = generate_dscaper_timeline(
+                dialog=dialog,
+                dscaper=self._dscaper,
+                dialog_directory=dialog_directory,
+                foreground_effect=environment.get("foreground_effect"),
+                foreground_effect_position=environment.get("foreground_effect_position"),
+                background_effect=environment.get("background_effect") or "white_noise",
+                audio_file_format=audio_file_format,
+                room=room,
+                sampling_rate=self.sampling_rate
+            )
+            logger.info("[Step 2] Has been completed!")
 
-                    # Overwrite the audio file with the new sampling rate
-                    sf.write(
-                        dialog.audio_step_1_filepath,
-                        y_resampled,
-                        re_sampling_rate
-                    )
+            # Combine the audio segments into a single master audio track as a baseline
+            dialog.set_combined_audio(
+                dialog.get_dry_audio()
+            )
 
-                    logger.info(f"[Step 1] Audio has been re-sampled successfully to {re_sampling_rate} Hz!")
+            # Save the combined audio to exported_audios folder
+            sf.write(
+                dialog.audio_step_1_filepath,
+                dialog.get_combined_audio(),
+                self.sampling_rate
+            )
+            logger.info(f"[Step 1] Dry audio have been saved here: {dialog.audio_step_1_filepath}")
 
             if perform_room_acoustics and not perform_tts and not os.path.exists(dialog.audio_step_1_filepath):
                 raise ValueError(
                     "Room acoustics cannot be performed without TTS unless the audio from step 1 is already available. "
                     "Please run with perform_tts=True first, or provide a dialog with existing audio paths."
                 )
-
-            # If the user want to generate the timeline from dSCAPER
-            if perform_room_acoustics:
-
-                from sdialog.audio.dscaper_utils import (
-                    send_utterances_to_dscaper,
-                    generate_dscaper_timeline
-                )
-
-                logger.info("[Step 2] Sending utterances to dSCAPER...")
-
-                # Send the utterances to dSCAPER
-                dialog: AudioDialog = send_utterances_to_dscaper(
-                    dialog,
-                    self._dscaper,
-                    dialog_directory=dialog_directory
-                )
-
-                # Generate the timeline from dSCAPER
-                logger.info("[Step 2] Generating timeline from dSCAPER...")
-                dialog: AudioDialog = generate_dscaper_timeline(
-                    dialog=dialog,
-                    dscaper=self._dscaper,
-                    dialog_directory=dialog_directory,
-                    foreground_effect=environment.get("foreground_effect"),
-                    foreground_effect_position=environment.get("foreground_effect_position"),
-                    background_effect=environment.get("background_effect") or "white_noise",
-                    audio_file_format=audio_file_format
-                )
-                logger.info("[Step 2] Has been completed!")
-
-                # If the user want to re-sample the output audio to a different sampling rate
-                if re_sampling_rate is not None and os.path.exists(dialog.audio_step_2_filepath):
-
-                    logger.info(f"[Step 2] Re-sampling audio to {re_sampling_rate} Hz...")
-
-                    y, sr = librosa.load(dialog.audio_step_2_filepath, sr=None)
-
-                    y_resampled = librosa.resample(
-                        y=y,
-                        orig_sr=sr,
-                        target_sr=re_sampling_rate
-                    )
-
-                    # Overwrite the audio file with the new sampling rate
-                    sf.write(
-                        dialog.audio_step_2_filepath,
-                        y_resampled,
-                        re_sampling_rate
-                    )
-
-                    logger.info(f"[Step 2] Audio has been re-sampled successfully to {re_sampling_rate} Hz!")
 
             # Generate the audio room accoustic
             if (
@@ -776,33 +794,26 @@ class AudioPipeline:
 
                 logger.info(f"[Step 3] Room accoustic has been generated successfully for dialogue {dialog.id}!")
 
-                # If the user want to re-sample the output audio to a different sampling rate
-                if re_sampling_rate is not None:
+                for config_name, config_data in dialog.audio_step_3_filepaths.items():
 
-                    for config_name, config_data in dialog.audio_step_3_filepaths.items():
-                        audio_path = config_data["audio_path"]
-                        if os.path.exists(audio_path):
-                            logger.info(f"[Step 3] Re-sampling audio for '{config_name}' to {re_sampling_rate} Hz...")
+                    audio_path = config_data.audio_path
 
-                            y, sr = librosa.load(audio_path, sr=None)
+                    if os.path.exists(audio_path):
 
-                            y_resampled = librosa.resample(
-                                y=y,
-                                orig_sr=sr,
-                                target_sr=re_sampling_rate
-                            )
+                        y, sr = librosa.load(audio_path, sr=None)
 
-                            # Overwrite the audio file with the new sampling rate
-                            sf.write(
-                                audio_path,
-                                y_resampled,
-                                re_sampling_rate
-                            )
+                        y_resampled = librosa.resample(
+                            y=y,
+                            orig_sr=sr,
+                            target_sr=self.sampling_rate
+                        )
 
-                            logger.info(
-                                f"[Step 3] Audio for '{config_name}' has been "
-                                f"re-sampled successfully to {re_sampling_rate} Hz!"
-                            )
+                        # Overwrite the audio file with the new sampling rate
+                        sf.write(
+                            audio_path,
+                            y_resampled,
+                            self.sampling_rate
+                        )
 
             elif perform_room_acoustics and room is None:
 
@@ -829,20 +840,20 @@ class AudioPipeline:
                     if room_name is not None and room_name != _room_name:
                         continue
 
-                    input_audio_path = room_data["audio_path"]
+                    input_audio_path = room_data.audio_path
 
                     # Check if the input audio (step 3) path exists
                     if not os.path.exists(input_audio_path):
                         raise ValueError(f"[Post-Processing] Input audio path not found: {input_audio_path}")
 
                     # If the audio paths post processing are not in the room data, create a new dictionary
-                    if "audio_paths_post_processing" not in room_data:
-                        room_data["audio_paths_post_processing"] = {}
+                    if room_data.audio_paths_post_processing is None:
+                        room_data.audio_paths_post_processing = {}
 
                     # For each recording device, apply the microphone effect
                     for recording_device in recording_devices:
 
-                        if str(recording_device) in room_data["audio_paths_post_processing"]:
+                        if str(recording_device) in room_data.audio_paths_post_processing:
                             logger.warning(
                                 f"[Post-Processing] Microphone effect already applied for device: {recording_device} "
                                 f" and room configuration: {_room_name}. Skipping..."
@@ -874,7 +885,7 @@ class AudioPipeline:
                             impulse_response_database=self.impulse_response_database
                         )
 
-                        room_data["audio_paths_post_processing"][str(recording_device)] = output_audio_path
+                        room_data.audio_paths_post_processing[str(recording_device)] = output_audio_path
 
                         logger.info(
                             f"[Post-Processing] Microphone effect applied for device: {recording_device}. "
