@@ -13,7 +13,7 @@ Example:
 
     .. code-block:: python
 
-        from sdialog.audio.tts import KokoroTTS, IndexTTS, HuggingFaceTTS, ChatterboxTTS
+        from sdialog.audio.tts import KokoroTTS, IndexTTS, HuggingFaceTTS
 
         # Initialize Kokoro TTS for American English
         tts = KokoroTTS(lang_code="a")
@@ -26,18 +26,13 @@ Example:
         # Initialize HuggingFaceTTS for facebook/mms-tts-eng model
         tts = HuggingFaceTTS(model_id="facebook/mms-tts-eng")
         audio, sample_rate = tts.generate("[clears throat] This is a test ...")
-
-        # Initialize ChatterboxTTS with voice cloning
-        tts = ChatterboxTTS(device="auto")
-        tts.register_voice("MyVoice", "./my_voice_sample.wav")
-        audio, sample_rate = tts.generate("Hello with cloned voice", voice="MyVoice")
 """
 
 # SPDX-FileCopyrightText: Copyright © 2025 Idiap Research Institute <contact@idiap.ch>
-# SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>
+# SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>, Sergio Burdisso <sergio.burdisso@idiap.ch>
 # SPDX-License-Identifier: MIT
-
 import numpy as np
+from typing import Any
 from abc import abstractmethod, ABC
 
 
@@ -87,6 +82,43 @@ class BaseTTS(ABC):
         :param speaker_voice: The voice identifier to use for speech generation.
         :type speaker_voice: str
         :param tts_pipeline_kwargs: Additional keyword arguments to be passed to the TTS pipeline.
+        :type tts_pipeline_kwargs: dict
+        :return: A tuple containing the audio data as a numpy array and the sampling rate.
+        :rtype: tuple[np.ndarray, int]
+        :raises NotImplementedError: If not implemented by subclass.
+        """
+        raise NotImplementedError("Subclasses must implement the generate method")
+
+
+class BaseVoiceCloneTTS(ABC):
+    """
+    Abstract base class for voice-cloning text-to-speech (TTS) engines.
+
+    This class extends the standard TTS interface to support voice cloning,
+    where the speaker can be defined by a reference audio path or a model-
+    specific prompt object. Subclasses must implement the generate() method.
+
+    :ivar pipeline: The TTS pipeline or model instance (initialized by subclasses).
+    :vartype pipeline: Any
+    """
+
+    @abstractmethod
+    def generate(
+            self,
+            text: str,
+            speaker_voice: Any = None,
+            tts_pipeline_kwargs: dict = {}) -> tuple[np.ndarray, int]:
+        """
+        Generates audio from text using voice cloning.
+
+        Subclasses must accept speaker_voice as either a path to reference audio,
+        a model-specific prompt object, or None for a default voice.
+
+        :param text: The text to be converted to speech.
+        :type text: str
+        :param speaker_voice: Reference audio path, prompt object, or None.
+        :type speaker_voice: Any
+        :param tts_pipeline_kwargs: Additional keyword arguments passed to the TTS pipeline.
         :type tts_pipeline_kwargs: dict
         :return: A tuple containing the audio data as a numpy array and the sampling rate.
         :rtype: tuple[np.ndarray, int]

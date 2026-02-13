@@ -34,8 +34,9 @@ Example:
 """
 
 # SPDX-FileCopyrightText: Copyright © 2025 Idiap Research Institute <contact@idiap.ch>
-# SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>
+# SPDX-FileContributor: Yanis Labrak <yanis.labrak@univ-avignon.fr>, Sergio Burdisso <sergio.burdisso@idiap.ch>
 # SPDX-License-Identifier: MIT
+
 import re
 import os
 import json
@@ -51,9 +52,10 @@ from sdialog import Dialog
 from sdialog.config import config
 from sdialog.audio.turn import AudioTurn
 from sdialog.util import get_llm_model, get_universal_id
-from sdialog.audio.utils import logger, Role, SourceVolume
+from sdialog.audio.tts.base import BaseTTS, BaseVoiceCloneTTS
 from sdialog.audio.voice_database import BaseVoiceDatabase, Voice
 from sdialog.audio.room import AudioSource, Room, MicrophonePosition, RoomPosition
+from sdialog.audio.utils import Role, CaseInsensitiveDict, logger, generate_reference_voices, SourceVolume
 
 
 class RoomAcousticsConfig(BaseModel):
@@ -105,8 +107,8 @@ class AudioDialog(Dialog):
     audio_step_2_filepath: str = ""
     audio_step_3_filepaths: Dict[str, RoomAcousticsConfig] = {}
 
-    speakers_names: dict[str, str] = {}
-    speakers_roles: dict[str, str] = {}
+    speakers_names: dict[str, str] = {}  # role2name mapping
+    speakers_roles: dict[str, str] = CaseInsensitiveDict()  # name2role mapping (case insensitive)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -125,6 +127,28 @@ class AudioDialog(Dialog):
         cloned.id = new_id if new_id is not None else get_universal_id()
 
         return cloned
+
+    def _update_speakers_roles(self):
+        """Compute the mapping between speaker names and roles needed for audio inference pipeline."""
+        # Get the unique speakers in the dialog in the order of appearance
+        speakers = []
+        for turn in self.turns:
+            if turn.speaker not in speakers:
+                speakers.append(turn.speaker)
+                if len(speakers) == 2:
+                    break
+
+        # In case dialog was loaded from a file or json
+        if not isinstance(self.speakers_roles, CaseInsensitiveDict):
+            self.speakers_roles = CaseInsensitiveDict()
+
+        # Create role mappings for speaker identification
+        self.speakers_names[Role.SPEAKER_1] = speakers[0]
+        self.speakers_names[Role.SPEAKER_2] = speakers[1]
+
+        # Create reverse mappings for role lookup
+        self.speakers_roles[speakers[0]] = Role.SPEAKER_1
+        self.speakers_roles[speakers[1]] = Role.SPEAKER_2
 
     def set_audio_sources(self, audio_sources: List[AudioSource]):
         """
@@ -221,18 +245,7 @@ class AudioDialog(Dialog):
 
         # Convert regular turns to audio turns
         audio_dialog.turns = [AudioTurn.from_turn(turn) for turn in dialog.turns]
-
-        # Identify speakers from the first two turns
-        speaker_1 = audio_dialog.turns[0].speaker
-        speaker_2 = audio_dialog.turns[1].speaker
-
-        # Create role mappings for speaker identification
-        audio_dialog.speakers_names[Role.SPEAKER_1] = speaker_1
-        audio_dialog.speakers_names[Role.SPEAKER_2] = speaker_2
-
-        # Create reverse mappings for role lookup
-        audio_dialog.speakers_roles[speaker_1] = Role.SPEAKER_1
-        audio_dialog.speakers_roles[speaker_2] = Role.SPEAKER_2
+        audio_dialog._update_speakers_roles()
 
         return audio_dialog
 
@@ -251,7 +264,9 @@ class AudioDialog(Dialog):
         :rtype: AudioDialog
         :raises ValidationError: If the dictionary data is invalid or incomplete.
         """
-        return AudioDialog.model_validate(data)
+        audio_dialog = AudioDialog.model_validate(data)
+        audio_dialog._update_speakers_roles()
+        return audio_dialog
 
     @staticmethod
     def from_json(json_str: str):
@@ -269,6 +284,28 @@ class AudioDialog(Dialog):
         :raises ValidationError: If the parsed data is invalid or incomplete.
         """
         return AudioDialog.from_dict(json.loads(json_str))
+
+    @staticmethod
+    def from_file(path: str) -> Union["AudioDialog", List["AudioDialog"]]:
+        """
+        Loads an audio dialog from a JSON file or a directory of JSON files.
+
+        :param path: Path to the dialogue file or directory. In case of a directory, all dialogues in the directory
+                     will be loaded and returned as a list of Dialog objects.
+        :type path: str
+        :return: The loaded dialogue object or a list of dialogue objects.
+        :rtype: Union[Dialog, List[Dialog]]
+        """
+        if os.path.isdir(path):
+            dialogs = [AudioDialog.from_file(os.path.join(path, filename))
+                       for filename in sorted(os.listdir(path))
+                       if filename.endswith(".json")]
+            return dialogs
+
+        with open(path) as reader:
+            dialog = AudioDialog.from_dict(json.load(reader))
+            dialog._path = path  # Store the path for later use
+            return dialog
 
     def to_file(self, path: str = None, makedir: bool = True, overwrite: bool = True):
         """
@@ -309,32 +346,33 @@ class AudioDialog(Dialog):
             raise FileExistsError(f"File '{path}' already exists. Use 'overwrite=True' to overwrite it.")
 
         with open(path, "w", newline='') as writer:
-            writer.write(self.model_dump_json(indent=2))
-
-    @staticmethod
-    def from_file(path: str) -> Union["AudioDialog", List["AudioDialog"]]:
-        """
-        Loads an audio dialog from a JSON file or a directory of JSON files.
-
-        :param path: Path to the dialogue file or directory. In case of a directory, all dialogues in the directory
-                     will be loaded and returned as a list of Dialog objects.
-        :type path: str
-        :return: The loaded dialogue object or a list of dialogue objects.
-        :rtype: Union[Dialog, List[Dialog]]
-        """
-        if os.path.isdir(path):
-            dialogs = [AudioDialog.from_file(os.path.join(path, filename))
-                       for filename in sorted(os.listdir(path))
-                       if filename.endswith(".json")]
-            return dialogs
-
-        with open(path) as reader:
-            dialog = AudioDialog.from_dict(json.load(reader))
-            dialog._path = path  # Store the path for later use
-            return dialog
+            writer.write(self.model_dump_json_safe(indent=2))
 
     def to_string(self):
-        return self.model_dump_json(indent=4)
+        return self.model_dump_json_safe(indent=4)
+
+    def model_dump_json_safe(self, **kwargs) -> str:
+        """
+        Safely dumps the AudioDialog object to a JSON string.
+
+        This method overrides the default model_dump_json to ensure that all
+        audio-specific attributes are included in the JSON output. It also
+        handles any special cases for serializing audio data or file paths.
+
+        :param kwargs: Additional keyword arguments passed to the base model_dump_json method.
+        :return: A JSON string representation of the AudioDialog object.
+        :rtype: str
+        """
+        try:
+            return self.model_dump_json(**kwargs)
+        except Exception:
+            # Set all turn.voice to "voice sample (non serializable)" to avoid serialization issues
+            for turn in self.turns:
+                turn.voice = "voice sample (non serializable)"
+            for speaker in self.personas:
+                if "voice" in self.personas[speaker]:
+                    self.personas[speaker]["voice"] = "voice sample (non serializable)"
+            return self.model_dump_json(**kwargs)
 
     def display(self):
         """
@@ -444,11 +482,15 @@ class AudioDialog(Dialog):
             if current_time < 0:
                 current_time = 0.0
 
+    # TODO: this method should be rename since does not return anything, maybe more like
+    #       "update_voices_from_personas" or "assign_voices_to_personas", and perhaps should be a private method
     def persona_to_voice(
         self,
         voice_database: BaseVoiceDatabase,
+        persona_to_voice_desc: Union[str, callable] = None,
         voices: dict[Role, Union[Voice, tuple[str, str]]] = None,
-        keep_duplicate: bool = True,
+        keep_duplicate: bool = False,
+        tts_engine: BaseTTS | BaseVoiceCloneTTS = None,
         seed: int = None
     ) -> None:
         """
@@ -466,6 +508,10 @@ class AudioDialog(Dialog):
 
         :param voice_database: Database containing available voices with metadata.
         :type voice_database: BaseVoiceDatabase
+        :param persona_to_voice_desc: Jinja2 template string or function that takes persona dictionary
+                                      and returns its voice descriptions. Defaults to a template with
+                                      gender and age only.
+        :type persona_to_voice_desc: Union[str, callable]
         :param voices: Optional dictionary mapping speaker roles to specific voices.
                     Keys are Role enums, values can be Voice objects or (identifier, language) tuples.
         :type voices: Optional[dict[Role, Union[Voice, tuple[str, str]]]]
@@ -474,6 +520,14 @@ class AudioDialog(Dialog):
         :param seed: Seed for random number generator.
         :type seed: int
         """
+        if voices is None and voice_database is None:
+            logger.info("No voices provided, generating them dynamically "
+                        "based on the persona definition of each speaker.")
+            reference_prompts = generate_reference_voices(dialog=self,
+                                                          voice_clone_model=tts_engine,
+                                                          persona_to_voice_desc=persona_to_voice_desc)
+            voices = {role: reference_prompts.get(speaker) for speaker, role in self.speakers_roles.items()}
+
         for speaker, persona in self.personas.items():
 
             # Check if the information about the voice is already in the persona, else add a random information
@@ -491,21 +545,27 @@ class AudioDialog(Dialog):
                     f"Language not found in the persona {speaker}, english has been considered by default"
                 )
 
+            # TODO: Why do we need roles Spekaer 1 or 2?? if we have the speaker name in personas??
             # Get the role of the speaker (speaker_1 or speaker_2)
             role: Role = self.speakers_roles[speaker]
 
-            if voices is not None and voices != {} and role not in voices:
-                raise ValueError(f"Voice for role {str(role)} not found in the voices dictionary")
+            print(f"voices: {voices}")
+            print(f"role: {role}")
+            print(f"speaker: {speaker}")
+
+            if voices and role not in voices and speaker not in voices:
+                raise ValueError(f"Voice for {str(role)} not found in the voices dictionary")
 
             # If no voices are provided, get a voice from the voice database based on the gender, age and language
             if voices is None or voices == {}:
-                persona["voice"] = voice_database.get_voice(
-                    gender=persona["gender"],
-                    age=persona["age"],
-                    lang=persona["language"],
-                    keep_duplicate=keep_duplicate,
-                    seed=seed
-                )
+                if voice_database is not None:
+                    persona["voice"] = voice_database.get_voice(
+                        gender=persona["gender"],
+                        age=persona["age"],
+                        lang=persona["language"],
+                        keep_duplicate=keep_duplicate,
+                        seed=seed
+                    )
 
             # If the voice of the speaker is provided as a Voice object
             elif isinstance(voices[role], Voice):
@@ -514,11 +574,21 @@ class AudioDialog(Dialog):
             # If the voice of the speaker is provided as an identifier (like "am_echo")
             elif isinstance(voices[role], tuple):
                 _identifier, _language = voices[role]
+                print("--------------------------------")
+                print(f"voices[role]: {voices[role]}")
+                print(f"_identifier: {_identifier}")
+                print(f"_language: {_language}")
+                print("--------------------------------")
                 persona["voice"] = voice_database.get_voice_by_identifier(
                     _identifier,
                     _language,
                     keep_duplicate=keep_duplicate
                 )
+            elif isinstance(voices[role], str):
+                persona["voice"] = Voice(voice=voices[role])
+            else:
+                # Fallback, forward the provided value directly to the TTS engine
+                persona["voice"] = voices[role]
 
     def get_dry_audio(self) -> np.ndarray:
         """
@@ -540,7 +610,8 @@ class AudioDialog(Dialog):
         dscaper_manager: dscaper.Dscaper = None,
         available_sound_effects: dict[str, dict] = None,
         model_name_alignment: str = "Qwen/Qwen3-ForcedAligner-0.6B",
-        dropout: float = 0.0
+        dropout: float = 0.0,
+        verbose: bool = False
     ) -> None:
         """
         Add sound effects (such as door opening, footsteps, etc.) to the audio.
@@ -555,6 +626,8 @@ class AudioDialog(Dialog):
         :type model_name_alignment: str
         :param dropout: The dropout rate for sound effects.
         :type dropout: float
+        :param verbose: Whether to print verbose output.
+        :type verbose: bool
         """
 
         # Annotate the turns with sound effect tags using LLM
@@ -590,9 +663,9 @@ class AudioDialog(Dialog):
                 device_map="cuda:0" if torch.cuda.is_available() else "cpu",
             )
         except ImportError:
-            logger.warning("`qwen-asr` package not found. Skipping forced alignment for sound effects.")
-            logger.warning("Please install it via: pip install qwen-asr")
-            return
+            logger.error("`qwen-asr` package not found. Skipping forced alignment for sound effects.")
+            logger.error("Please install it via: pip install qwen-asr")
+            raise ImportError("`qwen-asr` package not found. Please install it via: pip install qwen-asr")
         except Exception as e:
             logger.error(f"Failed to load {model_name_alignment}: {e}")
             return
@@ -608,7 +681,8 @@ class AudioDialog(Dialog):
                 new_text=new_text,
                 available_sound_effects=available_sound_effects,
                 aligner=aligner,
-                dscaper_manager=dscaper_manager
+                dscaper_manager=dscaper_manager,
+                verbose=verbose
             )
 
         self.update_turn_timings()
@@ -723,7 +797,8 @@ class AudioDialog(Dialog):
             new_text: str,
             available_sound_effects: dict[str, dict],
             aligner: Any,
-            dscaper_manager: dscaper.Dscaper) -> None:
+            dscaper_manager: dscaper.Dscaper,
+            verbose: bool = False) -> None:
         """
         Process a single turn to insert/mix sound effects based on tags and forced alignment.
 
@@ -737,9 +812,12 @@ class AudioDialog(Dialog):
         :type aligner: Any
         :param dscaper_manager: The dSCAPER manager to use for fetching audio files.
         :type dscaper_manager: dscaper.Dscaper
+        :param verbose: Whether to print verbose output.
+        :type verbose: bool
         """
 
-        print(new_text)
+        if verbose:
+            logger.info(new_text)
 
         # Check for tags
         tags = re.findall(r"\[(.*?)\]", new_text)
@@ -913,8 +991,10 @@ class AudioDialog(Dialog):
         # Validate length
         expected_gaps = len(self.turns) - 1
         if len(gaps) != expected_gaps:
-            logger.warning(f"LLM returned {len(gaps)} gaps, expected {expected_gaps}. "
-                           "Adjusting to match turn count.")
+            logger.warning(
+                f"LLM returned {len(gaps)} gaps, expected {expected_gaps}. "
+                "Adjusting to match turn count."
+            )
             # Pad or truncate
             if len(gaps) < expected_gaps:
                 gaps.extend([0.0] * (expected_gaps - len(gaps)))

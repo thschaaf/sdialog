@@ -2,6 +2,6 @@
 # SPDX-FileContributor: Author: Thomas Schaaf <thomas.schaaf@ieee.org>
 # SPDX-License-Identifier: MIT
 
-from .tts import Qwen3TTS
+from .tts import Qwen3TTS, Qwen3TTSVoiceClone
 
-__all__ = ["Qwen3TTS"]
+__all__ = ["Qwen3TTS", "Qwen3TTSVoiceClone"]

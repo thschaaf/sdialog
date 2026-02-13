@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from ..base import BaseTTS
+from ..base import BaseTTS, BaseVoiceCloneTTS
 from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 logger = logging.getLogger(__name__)
@@ -558,3 +558,89 @@ class Qwen3TTS(BaseTTS):
 
         except Exception as e:
             raise RuntimeError(f"Failed to generate audio with Qwen3-TTS: {e}") from e
+
+
+class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
+    """
+    Qwen3-TTS voice cloning engine using the Base model.
+
+    This class provides voice cloning capabilities using Qwen3-TTS-12Hz-1.7B-Base.
+    Unlike Qwen3TTS which uses CustomVoice model with speaker embeddings,
+    this class uses the Base model with reference audio for voice cloning.
+
+    :param model: The model identifier from the Hugging Face Hub.
+    :type model: str
+    :param device_map: Device to run the model on (e.g., "cuda:0", "cpu").
+    :type device_map: str
+    :param dtype: Data type for model weights.
+    :type dtype: torch.dtype
+    :param text_normalizers: List of text normalizers to apply before generation.
+    :type text_normalizers: list[TextNormalizer]
+    """
+
+    def __init__(
+            self,
+            model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+            device_map: str = None,
+            dtype: torch.dtype = torch.bfloat16,
+            text_normalizers: Optional[list[TextNormalizer]] = None,
+            **model_kwargs):
+
+        try:
+            from qwen_tts import Qwen3TTSModel
+        except ImportError:
+            raise ImportError(
+                "qwen_tts is not installed. Please install it with `pip install qwen-tts`."
+            )
+
+        if device_map is None:
+            device_map = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+        self.dtype = dtype
+        self.device_map = device_map
+        self.model = Qwen3TTSModel.from_pretrained(
+            model,
+            device_map=device_map,
+            dtype=dtype,
+            **model_kwargs
+        )
+        self.text_normalizers = text_normalizers
+
+    def generate(
+        self,
+        text: str,
+        speaker_voice=None,
+        tts_pipeline_kwargs: dict = {}
+    ) -> tuple[np.ndarray, int]:
+        """
+        Generate audio from text using Qwen3-TTS voice cloning.
+
+        :param text: The text to be converted to speech.
+        :type text: str
+        :param speaker_voice: Either a string path to a reference audio file,
+                              or a voice clone prompt object, or None for default voice.
+        :type speaker_voice: str | object | None
+        :param tts_pipeline_kwargs: Additional keyword arguments for the TTS pipeline.
+        :type tts_pipeline_kwargs: dict
+        :return: A tuple containing the audio data as numpy array and sampling rate.
+        :rtype: tuple[np.ndarray, int]
+        """
+        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+            text = normalize_text(text, self.text_normalizers)
+
+        if "language" not in tts_pipeline_kwargs:
+            tts_pipeline_kwargs["language"] = "English"
+
+        if type(speaker_voice) is str:
+            tts_pipeline_kwargs["ref_audio"] = speaker_voice
+            tts_pipeline_kwargs["ref_text"] = text
+        elif speaker_voice is not None:
+            tts_pipeline_kwargs["voice_clone_prompt"] = speaker_voice
+
+        wavs, sr = self.model.generate_voice_clone(
+            text=text,
+            **tts_pipeline_kwargs
+        )
+        audio = wavs[0].cpu().numpy() if hasattr(wavs[0], "cpu") else np.asarray(wavs[0])
+
+        return (audio, sr)
