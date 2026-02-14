@@ -707,7 +707,8 @@ class AudioPipeline:
                 # Save the utterances audios to the project path
                 dialog.save_utterances_audios(
                     dir_audio=self.dir_audio,
-                    project_path=os.path.join(dialog.audio_dir_path, dialog_directory)
+                    project_path=os.path.join(dialog.audio_dir_path, dialog_directory),
+                    sampling_rate=self.sampling_rate or 24_000,
                 )
 
             #########################################################

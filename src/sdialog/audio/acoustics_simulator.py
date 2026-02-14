@@ -264,7 +264,14 @@ class AcousticsSimulator:
             if audio_source.source_file and os.path.exists(audio_source.source_file):
 
                 # Read the audio file
+                import librosa
                 audio, original_fs = sf.read(audio_source.source_file)
+                if original_fs != self.sampling_rate:
+                    audio = librosa.resample(
+                        y=audio.astype(np.float32),
+                        orig_sr=original_fs,
+                        target_sr=self.sampling_rate
+                    )
 
                 # Convert to mono if stereo
                 if audio.ndim > 1:
