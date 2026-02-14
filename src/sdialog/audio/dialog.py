@@ -572,13 +572,10 @@ class AudioDialog(Dialog):
                 persona["voice"] = voices[role]
 
             # If the voice of the speaker is provided as an identifier (like "am_echo")
-            elif isinstance(voices[role], tuple):
+            # check if first item is str to avoid (array, sampling_rate) tuple cases
+            elif (isinstance(voices[role], tuple) and isinstance(voices[role][0], str)
+                  and voice_database is not None):
                 _identifier, _language = voices[role]
-                print("--------------------------------")
-                print(f"voices[role]: {voices[role]}")
-                print(f"_identifier: {_identifier}")
-                print(f"_language: {_language}")
-                print("--------------------------------")
                 persona["voice"] = voice_database.get_voice_by_identifier(
                     _identifier,
                     _language,
@@ -611,7 +608,8 @@ class AudioDialog(Dialog):
         available_sound_effects: dict[str, dict] = None,
         model_name_alignment: str = "Qwen/Qwen3-ForcedAligner-0.6B",
         dropout: float = 0.0,
-        verbose: bool = False
+        verbose: bool = False,
+        skip_annotation: bool = False
     ) -> None:
         """
         Add sound effects (such as door opening, footsteps, etc.) to the audio.
@@ -628,13 +626,18 @@ class AudioDialog(Dialog):
         :type dropout: float
         :param verbose: Whether to print verbose output.
         :type verbose: bool
+        :param skip_annotation: Whether to skip the annotation of the sound effects.
+        :type skip_annotation: bool
         """
 
-        # Annotate the turns with sound effect tags using LLM
-        decorated_turns = self._annotate_sound_effects_from_turns(
-            sound_effects_db=available_sound_effects,
-            room=room
-        )
+        if not skip_annotation:
+            # Annotate the turns with sound effect tags using LLM
+            decorated_turns = self._annotate_sound_effects_from_turns(
+                sound_effects_db=available_sound_effects,
+                room=room
+            )
+        else:
+            decorated_turns = self.turns
 
         # If the dropout rate is greater than 0.0, we will drop some of the sound effects tags
         if dropout > 0.0:
@@ -919,6 +922,7 @@ class AudioDialog(Dialog):
                 "position": position,
                 "start_time": start_time,
                 "duration": available_sound_effects[tag].get("duration", "unknown"),
+                "position": position,
             })
 
     def compute_overlapping_and_pausing_llm(self, verbose: bool = False):
@@ -984,8 +988,12 @@ class AudioDialog(Dialog):
             structured_response = GapDurations.model_validate(raw_response)
             gaps = structured_response.gaps
         except Exception as e:
-            logger.error(f"Failed to compute gaps with LLM: {e}")
-            return self.clone()
+            logger.warning(f"Failed to compute gaps with LLM: {e}")
+            gaps = [
+                round(random.uniform(0.2, 0.7), 1)
+                for _idx in
+                range(len(self.turns) - 1)
+            ]
 
         # Validate length
         expected_gaps = len(self.turns) - 1

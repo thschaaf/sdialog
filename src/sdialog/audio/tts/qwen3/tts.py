@@ -2,6 +2,7 @@
 # SPDX-FileContributor: Author: Thomas Schaaf <thomas.schaaf@ieee.org>
 # SPDX-License-Identifier: MIT
 
+import re
 import torch
 import numpy as np
 import logging
@@ -484,6 +485,10 @@ class Qwen3TTS(BaseTTS):
         if self.text_normalizers is not None and len(self.text_normalizers) > 0:
             text = normalize_text(text, self.text_normalizers)
 
+        # Remove audio event tags (e.g. [door opening]) before TTS
+        text = re.sub(r"\[.*?\]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+
         # Normalize and validate language
         try:
             normalized_language = self._normalize_language(language)
@@ -625,17 +630,22 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
         :return: A tuple containing the audio data as numpy array and sampling rate.
         :rtype: tuple[np.ndarray, int]
         """
+        # Normalize the text if text normalizers are provided.
         if self.text_normalizers is not None and len(self.text_normalizers) > 0:
             text = normalize_text(text, self.text_normalizers)
 
         if "language" not in tts_pipeline_kwargs:
             tts_pipeline_kwargs["language"] = "English"
 
-        if type(speaker_voice) is str:
+        if speaker_voice is not None:
+            # Path to reference audio or (array, sampling_rate) tuple
             tts_pipeline_kwargs["ref_audio"] = speaker_voice
-            tts_pipeline_kwargs["ref_text"] = text
-        elif speaker_voice is not None:
-            tts_pipeline_kwargs["voice_clone_prompt"] = speaker_voice
+            tts_pipeline_kwargs["x_vector_only_mode"] = True
+        else:
+            raise ValueError(
+                "speaker_voice must be provided for "
+                "voice cloning in Qwen3TTSVoiceClone"
+            )
 
         wavs, sr = self.model.generate_voice_clone(
             text=text,
