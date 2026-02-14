@@ -919,7 +919,6 @@ class AudioDialog(Dialog):
                 "position": position,
                 "start_time": start_time,
                 "duration": available_sound_effects[tag].get("duration", "unknown"),
-                "position": position,
             })
 
     def compute_overlapping_and_pausing_llm(self, verbose: bool = False):
