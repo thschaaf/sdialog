@@ -146,28 +146,15 @@ def generate_utterances_audios(
             tts_pipeline_kwargs=tts_pipeline_kwargs
         )
 
-        # If the sampling rate of the audio is not the same as the sampling rate of the project, resample the audio
-        if utterance_sampling_rate != sampling_rate:
-            logger.info(
-                f"[Step 1] Resampling the audio ({utterance_sampling_rate} Hz) to the sampling "
-                f"rate of the project ({sampling_rate} Hz)..."
-            )
-
-            utterance_audio = librosa.resample(
-                y=utterance_audio.astype(np.float32),
-                orig_sr=utterance_sampling_rate,
-                target_sr=sampling_rate,
-            )
-
         # Remove the silences at the beginning and the end of the audio
         if remove_silences:
             utterance_audio, _ = librosa.effects.trim(utterance_audio, top_db=60)
 
-        # Set the utterance audio to the turn
-        turn.set_audio(utterance_audio, sampling_rate)
+        # Set the utterance audio to the turn (keep original TTS sample rate)
+        turn.set_audio(utterance_audio, utterance_sampling_rate)
 
         # Set the audio duration of the turn
-        turn.audio_duration = utterance_audio.shape[0] / sampling_rate
+        turn.audio_duration = utterance_audio.shape[0] / utterance_sampling_rate
 
     return dialog
 
