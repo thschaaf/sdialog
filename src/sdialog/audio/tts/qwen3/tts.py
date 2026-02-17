@@ -515,8 +515,9 @@ class Qwen3TTS(BaseTTS):
 
         :param text: The text to be converted to speech.
         :type text: str
-        :param speaker_voice: Voice identifier - registered voice name or path to audio file.
-        :type speaker_voice: str
+        :param speaker_voice: Voice identifier - registered voice name, path to audio file,
+            or (wav_array, sample_rate) tuple for in-memory audio.
+        :type speaker_voice: str | tuple[np.ndarray, int]
         :param language: Language code or name (e.g., "en"/"English", "fr"/"French").
         :type language: str
         :param tts_pipeline_kwargs: Additional keyword arguments for the TTS pipeline.
@@ -551,7 +552,19 @@ class Qwen3TTS(BaseTTS):
                 _seed_torch(self.seed)
 
             # Determine voice source and generate accordingly
-            if speaker_voice in self.voice_registry:
+            if isinstance(speaker_voice, tuple) and len(speaker_voice) == 2:
+                # In-memory audio as (wav_array, sample_rate) tuple
+                wav, ref_sr = speaker_voice
+                wav = _normalize_audio(wav)
+                logger.debug("Generating with in-memory audio tuple (x_vector mode)")
+                wavs, sample_rate = self.pipeline.generate_voice_clone(
+                    text=text,
+                    ref_audio=(wav, ref_sr),
+                    x_vector_only_mode=True,
+                    **gen_kwargs
+                )
+
+            elif speaker_voice in self.voice_registry:
                 # Use registered voice with cached prompt
                 voice_info = self.voice_registry[speaker_voice]
                 logger.debug(
@@ -564,7 +577,7 @@ class Qwen3TTS(BaseTTS):
                     **gen_kwargs
                 )
 
-            elif Path(speaker_voice).exists():
+            elif isinstance(speaker_voice, str) and Path(speaker_voice).exists():
                 # Direct path to audio file - create prompt on-the-fly
                 logger.debug(f"Generating with direct audio path (x_vector mode): {speaker_voice}")
                 voice_prompt = self.pipeline.create_voice_clone_prompt(
