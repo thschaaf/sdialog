@@ -45,6 +45,7 @@ Example:
 # SPDX-License-Identifier: MIT
 import os
 import json
+import random
 import dscaper
 import librosa
 import logging
@@ -57,6 +58,7 @@ from sdialog import Dialog
 from sdialog.audio.utils import logger
 from sdialog.audio.dialog import AudioDialog
 from sdialog.audio.processing import AudioProcessor
+from sdialog.audio.normalizers import normalize_audio
 from sdialog.audio.jsalt import MedicalRoomGenerator, RoomRole
 from sdialog.audio.room import Room, RoomPosition, DirectivityType
 from sdialog.audio.tts import BaseTTS, Qwen3TTS, Qwen3TTSVoiceClone
@@ -102,7 +104,9 @@ def to_audio(
     add_sound_effects: Optional[bool] = False,
     sound_effects_datasets: Optional[List[str]] = None,
     sound_effects_dropout: Optional[float] = 0.0,
-    skip_annotation: Optional[bool] = False
+    skip_annotation: Optional[bool] = False,
+    remove_silences: Optional[bool] = True,
+    normalize: Optional[bool] = True
 ) -> AudioDialog:
     """
     Convert a dialogue into an audio dialogue with comprehensive audio processing.
@@ -176,6 +180,11 @@ def to_audio(
     :param skip_annotation: Whether to skip the annotation of the sound effects
                             (if your dialogs are already annotated with sound effects tags, you can skip this step).
     :type skip_annotation: Optional[bool]
+    :param remove_silences: Remove the silences at the beginning and the end of the audio.
+    :type remove_silences: Optional[bool]
+    :param normalize: Apply RMS normalization after each audio processing step to center
+                      all outputs around the same gain level.
+    :type normalize: Optional[bool]
     :return: Audio dialogue with processed audio data.
     :rtype: AudioDialog
     """
@@ -298,7 +307,9 @@ def to_audio(
             overlap_pauses=overlap_pauses,
             add_sound_effects=add_sound_effects,
             sound_effects_dropout=sound_effects_dropout,
-            skip_annotation=skip_annotation
+            skip_annotation=skip_annotation,
+            remove_silences=remove_silences,
+            normalize=normalize
         )
 
     finally:
@@ -524,7 +535,9 @@ class AudioPipeline:
         overlap_pauses: Optional[bool] = False,
         add_sound_effects: Optional[bool] = False,
         sound_effects_dropout: Optional[float] = 0.0,
-        skip_annotation: Optional[bool] = False
+        skip_annotation: Optional[bool] = False,
+        remove_silences: Optional[bool] = True,
+        normalize: Optional[bool] = True
     ) -> AudioDialog:
         """
         Execute the complete audio generation pipeline.
@@ -575,6 +588,11 @@ class AudioPipeline:
         :param skip_annotation: Whether to skip the annotation of the sound effects
                                 (if your dialogs are already annotated with sound effects tags, you can skip this step).
         :type skip_annotation: Optional[bool]
+        :param remove_silences: Remove the silences at the beginning and the end of the audio.
+        :type remove_silences: Optional[bool]
+        :param normalize: Apply RMS normalization after each audio processing step to center
+                          all outputs around the same gain level.
+        :type normalize: Optional[bool]
         :return: Processed audio dialogue with all audio data.
         :rtype: AudioDialog
 
@@ -695,56 +713,73 @@ class AudioPipeline:
                     seed=seed,
                     sampling_rate=self.sampling_rate,
                     tts_pipeline_kwargs=tts_pipeline_kwargs,
-                    remove_silences=overlap_pauses
+                    remove_silences=remove_silences
                 )
-
-                # Compute the overlapping and pausing between turns using LLM
-                if overlap_pauses:
-                    dialog.compute_overlapping_and_pausing_llm(verbose=verbose)
-
-                if add_sound_effects:
-
-                    from sdialog.audio.dscaper_utils import get_sound_effects_db
-
-                    # Fetch the list of available sound effects from dscaper
-                    _available_sound_effects = get_sound_effects_db(dscaper_manager=self._dscaper)
-
-                    dialog.add_sound_effects(
-                        room=room,
-                        dscaper_manager=self._dscaper,
-                        available_sound_effects=_available_sound_effects,
-                        dropout=sound_effects_dropout,
-                        verbose=verbose,
-                        skip_annotation=skip_annotation
-                    )
-
-                # Ensure that the turn timings are updated after the overlapping
-                # and pausing between turns are computed
-                dialog.update_turn_timings()
 
                 # Save the utterances audios to the project path
                 dialog.save_utterances_audios(
                     dir_audio=self.dir_audio,
-                    project_path=os.path.join(dialog.audio_dir_path, dialog_directory)
+                    project_path=os.path.join(dialog.audio_dir_path, dialog_directory),
+                    sampling_rate=self.sampling_rate
                 )
+
+                from sdialog.audio.dscaper_utils import send_utterances_to_dscaper
+
+                # Send the utterances to dSCAPER
+                dialog: AudioDialog = send_utterances_to_dscaper(
+                    dialog,
+                    self._dscaper,
+                    dialog_directory=dialog_directory
+                )
+
+            # Compute the overlapping and pausing between turns using LLM
+            if overlap_pauses:
+                dialog.compute_overlapping_and_pausing_llm(
+                    verbose=verbose,
+                    seed=seed
+                )
+            else:
+                rng = random.Random(seed) if seed is not None else random
+                _gaps = [
+                    round(rng.uniform(0.2, 0.7), 1)
+                    for _idx in
+                    range(len(dialog.turns) - 1)
+                ]
+
+                for i in range(len(_gaps)):
+                    dialog.turns[i].gap_duration = _gaps[i]
+
+            dialog.update_turn_timings()
+
+            if add_sound_effects:
+
+                from sdialog.audio.dscaper_utils import get_sound_effects_db
+
+                # Fetch the list of available sound effects from dscaper
+                _available_sound_effects = get_sound_effects_db(dscaper_manager=self._dscaper)
+
+                dialog.add_sound_effects(
+                    room=room,
+                    dscaper_manager=self._dscaper,
+                    available_sound_effects=_available_sound_effects,
+                    dropout=sound_effects_dropout,
+                    verbose=verbose,
+                    skip_annotation=skip_annotation
+                )
+            else:
+                for turn in dialog.turns:
+                    turn.sound_effects = []
+                    turn.text_with_tags = ""
+
+            # Ensure that the turn timings are updated after the overlapping
+            # and pausing between turns are computed
+            dialog.update_turn_timings()
 
             #########################################################
             # Step 2: Generate the timeline from dSCAPER
             #########################################################
 
-            from sdialog.audio.dscaper_utils import (
-                send_utterances_to_dscaper,
-                generate_dscaper_timeline
-            )
-
-            logger.info("[Step 2] Sending utterances to dSCAPER...")
-
-            # Send the utterances to dSCAPER
-            dialog: AudioDialog = send_utterances_to_dscaper(
-                dialog,
-                self._dscaper,
-                dialog_directory=dialog_directory
-            )
+            from sdialog.audio.dscaper_utils import generate_dscaper_timeline
 
             # Generate the timeline from dSCAPER
             logger.info("[Step 2] Generating timeline from dSCAPER...")
@@ -757,14 +792,21 @@ class AudioPipeline:
                 background_effect=environment.get("background_effect") or "white_noise",
                 audio_file_format=audio_file_format,
                 room=room,
-                sampling_rate=self.sampling_rate
+                sampling_rate=self.sampling_rate,
+                seed=seed,
+                add_sound_effects=add_sound_effects
             )
             logger.info("[Step 2] Has been completed!")
 
             # Combine the audio segments into a single master audio track as a baseline
-            dialog.set_combined_audio(
-                dialog.get_dry_audio()
-            )
+            _combined_audio = dialog.get_dry_audio()
+
+            # Apply RMS normalization to the dry audio (after sound events + overlaps)
+            if normalize:
+                _combined_audio = normalize_audio(_combined_audio)
+                logger.info("[Step 2] RMS normalization applied to the dry audio.")
+
+            dialog.set_combined_audio(_combined_audio)
 
             # Save the combined audio to exported_audios folder
             sf.write(
@@ -851,6 +893,13 @@ class AudioPipeline:
                             orig_sr=sr,
                             target_sr=self.sampling_rate
                         )
+
+                        # Apply RMS normalization to the wet audio (after room acoustics)
+                        if normalize:
+                            y_resampled = normalize_audio(y_resampled)
+                            logger.info(
+                                f"[Step 3] RMS normalization applied to wet audio: {config_name}"
+                            )
 
                         # Overwrite the audio file with the new sampling rate
                         sf.write(

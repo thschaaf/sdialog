@@ -65,7 +65,7 @@ from sdialog.audio.room import Room, RoomPosition
 from sdialog.audio.acoustics_simulator import AcousticsSimulator
 from sdialog.audio.voice_database import BaseVoiceDatabase, Voice
 from sdialog.audio.dialog import AudioDialog, RoomAcousticsConfig
-from sdialog.audio.utils import AudioUtils, SourceVolume, Role, logger
+from sdialog.audio.utils import SourceVolume, Role, logger
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -80,7 +80,7 @@ def generate_utterances_audios(
     seed: int = None,
     sampling_rate: int = 24_000,
     tts_pipeline_kwargs: dict = {},
-    remove_silences: bool = False
+    remove_silences: bool = True
 ) -> AudioDialog:
     """
     Generates audio for each utterance in an AudioDialog object using the specified TTS engine.
@@ -140,21 +140,34 @@ def generate_utterances_audios(
 
         # Generate the utterance audio
         utterance_audio, utterance_sampling_rate = generate_utterance(
-            text=AudioUtils.remove_audio_tags(turn.text),
+            text=turn.text,
             voice=turn.voice,
             tts_pipeline=tts_pipeline,
             tts_pipeline_kwargs=tts_pipeline_kwargs
         )
 
+        # If the sampling rate of the audio is not the same as the sampling rate of the project, resample the audio
+        if utterance_sampling_rate != sampling_rate:
+            logger.info(
+                f"[Step 1] Resampling the audio ({utterance_sampling_rate} Hz) to the sampling "
+                f"rate of the project ({sampling_rate} Hz)..."
+            )
+
+            utterance_audio = librosa.resample(
+                y=utterance_audio.astype(np.float32),
+                orig_sr=utterance_sampling_rate,
+                target_sr=sampling_rate,
+            )
+
         # Remove the silences at the beginning and the end of the audio
         if remove_silences:
             utterance_audio, _ = librosa.effects.trim(utterance_audio, top_db=60)
 
-        # Set the utterance audio to the turn (keep original TTS sample rate)
-        turn.set_audio(utterance_audio, utterance_sampling_rate)
+        # Set the utterance audio to the turn
+        turn.set_audio(utterance_audio, sampling_rate)
 
         # Set the audio duration of the turn
-        turn.audio_duration = utterance_audio.shape[0] / utterance_sampling_rate
+        turn.audio_duration = utterance_audio.shape[0] / sampling_rate
 
     return dialog
 
@@ -185,7 +198,12 @@ def generate_utterance(
     :return: A tuple containing the audio data as a numpy array and the sampling rate.
     :rtype: tuple[np.ndarray, int]
     """
-    return tts_pipeline.generate(text, speaker_voice=voice, tts_pipeline_kwargs=tts_pipeline_kwargs)
+    audio, sr = tts_pipeline.generate(text, speaker_voice=voice, tts_pipeline_kwargs=tts_pipeline_kwargs)
+
+    if isinstance(audio, torch.Tensor):
+        audio = audio.cpu().numpy()
+
+    return audio, sr
 
 
 def generate_audio_room_accoustic(

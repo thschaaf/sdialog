@@ -48,6 +48,7 @@ import shutil
 import dscaper
 import logging
 import soundfile as sf
+
 from sdialog.audio.utils import logger, Role
 from sdialog.audio.dialog import AudioDialog
 from sdialog.audio.room import AudioSource, RoomPosition, Room
@@ -241,7 +242,8 @@ def generate_dscaper_timeline(
         seed: int = 0,
         referent_db: int = -40,
         reverberation: int = 0,
-        room: Room = None
+        room: Room = None,
+        add_sound_effects: bool = False
 ) -> AudioDialog:
     """
     Generate a dSCAPER timeline for realistic audio environment simulation.
@@ -275,6 +277,8 @@ def generate_dscaper_timeline(
     :type reverberation: int
     :param room: Room configuration for checking the validity of the positions.
     :type room: Room
+    :param add_sound_effects: Whether to add sound effects to the timeline.
+    :type add_sound_effects: bool
     :return: Audio dialogue with generated timeline and audio sources.
     :rtype: AudioDialog
     """
@@ -343,6 +347,7 @@ def generate_dscaper_timeline(
                     if foreground_effect_position is not None
                     else RoomPosition.TOP_RIGHT
                 ),
+                loop_event=True,
             )
             dscaper.add_event(timeline_name, foreground_metadata)
 
@@ -366,7 +371,7 @@ def generate_dscaper_timeline(
             dscaper.add_event(timeline_name, _event_metadata)
 
             # Add sound effects events if any
-            if hasattr(turn, 'sound_effects') and turn.sound_effects:
+            if hasattr(turn, 'sound_effects') and turn.sound_effects and add_sound_effects is True:
 
                 for sfx in turn.sound_effects:
 

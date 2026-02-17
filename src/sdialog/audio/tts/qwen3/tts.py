@@ -14,6 +14,42 @@ from sdialog.audio.normalizers import TextNormalizer, normalize_text
 
 logger = logging.getLogger(__name__)
 
+
+def _seed_torch(seed: int) -> None:
+    """Seed all torch RNGs for reproducible generation."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _normalize_audio(wav, eps=1e-12, clip=True):
+    """Normalize audio to float32 in [-1, 1] range."""
+    x = np.asarray(wav)
+
+    if np.issubdtype(x.dtype, np.integer):
+        info = np.iinfo(x.dtype)
+        if info.min < 0:
+            y = x.astype(np.float32) / max(abs(info.min), info.max)
+        else:
+            mid = (info.max + 1) / 2.0
+            y = (x.astype(np.float32) - mid) / mid
+    elif np.issubdtype(x.dtype, np.floating):
+        y = x.astype(np.float32)
+        m = np.max(np.abs(y)) if y.size else 0.0
+        if m > 1.0 + 1e-6:
+            y = y / (m + eps)
+    else:
+        raise TypeError(f"Unsupported dtype: {x.dtype}")
+
+    if clip:
+        y = np.clip(y, -1.0, 1.0)
+
+    if y.ndim > 1:
+        y = np.mean(y, axis=-1).astype(np.float32)
+
+    return y
+
+
 # Language code to full name mapping
 # Supports both ISO codes (en, fr, etc.) and full language names
 LANGUAGE_MAP = {
@@ -125,7 +161,9 @@ class Qwen3TTS(BaseTTS):
         model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         dtype: str = "bfloat16",
         use_flash_attention: str = "auto",
-        text_normalizers: Optional[list[TextNormalizer]] = None
+        text_normalizers: Optional[list[TextNormalizer]] = None,
+        deterministic: bool = False,
+        seed: int = 42
     ):
         """
         Initialize the Qwen3-TTS engine.
@@ -144,11 +182,18 @@ class Qwen3TTS(BaseTTS):
         :type use_flash_attention: str or bool
         :param text_normalizers: The list of text normalizers to apply before generation.
         :type text_normalizers: list[TextNormalizer]
+        :param deterministic: If True, disables sampling (greedy decoding)
+            and seeds torch RNG before every generation call.
+        :type deterministic: bool
+        :param seed: Random seed used when deterministic=True.
+        :type seed: int
         :raises ImportError: If the required qwen-tts package is not installed.
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
         self.text_normalizers = text_normalizers
+        self.deterministic = deterministic
+        self.seed = seed
 
         try:
             from qwen_tts import Qwen3TTSModel
@@ -499,6 +544,12 @@ class Qwen3TTS(BaseTTS):
             # Prepare generation kwargs
             gen_kwargs = {"language": normalized_language, **tts_pipeline_kwargs}
 
+            # Deterministic mode: disable sampling and seed RNG
+            if self.deterministic:
+                if "do_sample" not in gen_kwargs:
+                    gen_kwargs["do_sample"] = False
+                _seed_torch(self.seed)
+
             # Determine voice source and generate accordingly
             if speaker_voice in self.voice_registry:
                 # Use registered voice with cached prompt
@@ -569,18 +620,23 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
     """
     Qwen3-TTS voice cloning engine using the Base model.
 
-    This class provides voice cloning capabilities using Qwen3-TTS-12Hz-1.7B-Base.
-    Unlike Qwen3TTS which uses CustomVoice model with speaker embeddings,
-    this class uses the Base model with reference audio for voice cloning.
+    This class provides voice cloning capabilities using
+    Qwen3-TTS-12Hz-1.7B-Base. Unlike Qwen3TTS which uses CustomVoice
+    model with speaker embeddings, this class uses the Base model with
+    reference audio for voice cloning.
 
     :param model: The model identifier from the Hugging Face Hub.
     :type model: str
-    :param device_map: Device to run the model on (e.g., "cuda:0", "cpu").
+    :param device_map: Device to run the model on.
     :type device_map: str
     :param dtype: Data type for model weights.
     :type dtype: torch.dtype
-    :param text_normalizers: List of text normalizers to apply before generation.
+    :param text_normalizers: List of text normalizers.
     :type text_normalizers: list[TextNormalizer]
+    :param deterministic: If True, disables sampling and seeds torch RNG.
+    :type deterministic: bool
+    :param seed: Random seed used when deterministic=True.
+    :type seed: int
     """
 
     def __init__(
@@ -588,21 +644,28 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
             model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
             device_map: str = None,
             dtype: torch.dtype = torch.bfloat16,
-            text_normalizers: Optional[list[TextNormalizer]] = None,
+            text_normalizers: list[TextNormalizer] = None,
+            deterministic: bool = False,
+            seed: int = 42,
             **model_kwargs):
 
         try:
             from qwen_tts import Qwen3TTSModel
         except ImportError:
             raise ImportError(
-                "qwen_tts is not installed. Please install it with `pip install qwen-tts`."
+                "qwen_tts is not installed. "
+                "Please install it with `pip install qwen-tts`."
             )
 
         if device_map is None:
-            device_map = "cuda:0" if torch.cuda.is_available() else "cpu"
+            device_map = (
+                "cuda:0" if torch.cuda.is_available() else "cpu"
+            )
 
         self.dtype = dtype
         self.device_map = device_map
+        self.deterministic = deterministic
+        self.seed = seed
         self.model = Qwen3TTSModel.from_pretrained(
             model,
             device_map=device_map,
@@ -612,33 +675,44 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
         self.text_normalizers = text_normalizers
 
     def generate(
-        self,
-        text: str,
-        speaker_voice=None,
-        tts_pipeline_kwargs: dict = {}
+            self,
+            text: str,
+            speaker_voice=None,
+            tts_pipeline_kwargs: dict = {}
     ) -> tuple[np.ndarray, int]:
         """
         Generate audio from text using Qwen3-TTS voice cloning.
 
         :param text: The text to be converted to speech.
         :type text: str
-        :param speaker_voice: Either a string path to a reference audio file,
-                              or a voice clone prompt object, or None for default voice.
-        :type speaker_voice: str | object | None
-        :param tts_pipeline_kwargs: Additional keyword arguments for the TTS pipeline.
+        :param speaker_voice: Reference audio file path,
+            voice clone prompt object, or (wav, sr) tuple.
+        :type speaker_voice: str | object | tuple | None
+        :param tts_pipeline_kwargs: Additional kwargs for the pipeline.
         :type tts_pipeline_kwargs: dict
-        :return: A tuple containing the audio data as numpy array and sampling rate.
+        :return: Audio data as numpy array and sampling rate.
         :rtype: tuple[np.ndarray, int]
         """
-        # Normalize the text if text normalizers are provided.
-        if self.text_normalizers is not None and len(self.text_normalizers) > 0:
+        if self.text_normalizers is not None and len(
+            self.text_normalizers
+        ) > 0:
             text = normalize_text(text, self.text_normalizers)
 
         if "language" not in tts_pipeline_kwargs:
             tts_pipeline_kwargs["language"] = "English"
 
+        if self.deterministic:
+            if "do_sample" not in tts_pipeline_kwargs:
+                tts_pipeline_kwargs["do_sample"] = False
+            _seed_torch(self.seed)
+
         if speaker_voice is not None:
-            # Path to reference audio or (array, sampling_rate) tuple
+            # Normalize ref audio if provided as (wav, sr) tuple
+            if (isinstance(speaker_voice, tuple)
+                    and len(speaker_voice) == 2):
+                wav, ref_sr = speaker_voice
+                wav = _normalize_audio(wav)
+                speaker_voice = (wav, ref_sr)
             tts_pipeline_kwargs["ref_audio"] = speaker_voice
             tts_pipeline_kwargs["x_vector_only_mode"] = True
         else:
@@ -651,6 +725,10 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
             text=text,
             **tts_pipeline_kwargs
         )
-        audio = wavs[0].cpu().numpy() if hasattr(wavs[0], "cpu") else np.asarray(wavs[0])
+        audio = (
+            wavs[0].cpu().numpy()
+            if hasattr(wavs[0], "cpu")
+            else np.asarray(wavs[0])
+        )
 
         return (audio, sr)

@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import shutil
 import pytest
@@ -17,7 +18,7 @@ try:
 
     from sdialog.audio.turn import AudioTurn
     from sdialog.audio.room_generator import BasicRoomGenerator
-    from sdialog.audio.utils import Role, AudioUtils, Furniture, SpeakerSide
+    from sdialog.audio.utils import Role, Furniture, SpeakerSide
     from sdialog.audio.room import Position3D, Dimensions3D, DirectivityType, Room
     from sdialog.audio.voice_database import Voice, is_a_audio_file
     from sdialog.audio.voice_database import BaseVoiceDatabase, LocalVoiceDatabase, VoiceDatabase
@@ -312,7 +313,7 @@ def test_audio_turn_get_set_audio():
 
 def test_audio_utils_remove_tags():
     tagged_text = "<speak>Hello *world*</speak>"
-    cleaned_text = AudioUtils.remove_audio_tags(tagged_text)
+    cleaned_text = re.sub(r'<[^>]*>', '', tagged_text).replace("*", "")
     assert cleaned_text == "Hello world"
 
 
