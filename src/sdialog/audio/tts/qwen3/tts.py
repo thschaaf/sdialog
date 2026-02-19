@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from ..base import BaseTTS, BaseVoiceCloneTTS
-from sdialog.audio.normalizers import TextNormalizer, normalize_text
+from sdialog.audio.normalizers import TextNormalizer, UnicodeToAsciiNormalizer, normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,7 @@ class Qwen3TTS(BaseTTS):
         dtype: str = "bfloat16",
         use_flash_attention: str = "auto",
         text_normalizers: Optional[list[TextNormalizer]] = None,
+        unicode_to_ascii: bool = True,
         deterministic: bool = False,
         seed: int = 42
     ):
@@ -182,6 +183,9 @@ class Qwen3TTS(BaseTTS):
         :type use_flash_attention: str or bool
         :param text_normalizers: The list of text normalizers to apply before generation.
         :type text_normalizers: list[TextNormalizer]
+        :param unicode_to_ascii: If True, prepend a UnicodeToAsciiNormalizer to the
+            normalizer chain (default: True).
+        :type unicode_to_ascii: bool
         :param deterministic: If True, disables sampling (greedy decoding)
             and seeds torch RNG before every generation call.
         :type deterministic: bool
@@ -191,6 +195,10 @@ class Qwen3TTS(BaseTTS):
         :raises RuntimeError: If the specified device is not available.
         """
         super().__init__()
+        if text_normalizers is None:
+            text_normalizers = []
+        if unicode_to_ascii:
+            text_normalizers = [UnicodeToAsciiNormalizer()] + list(text_normalizers)
         self.text_normalizers = text_normalizers
         self.deterministic = deterministic
         self.seed = seed
@@ -658,6 +666,7 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
             device_map: str = None,
             dtype: torch.dtype = torch.bfloat16,
             text_normalizers: list[TextNormalizer] = None,
+            unicode_to_ascii: bool = True,
             deterministic: bool = False,
             seed: int = 42,
             **model_kwargs):
@@ -685,6 +694,10 @@ class Qwen3TTSVoiceClone(BaseVoiceCloneTTS):
             dtype=dtype,
             **model_kwargs
         )
+        if text_normalizers is None:
+            text_normalizers = []
+        if unicode_to_ascii:
+            text_normalizers = [UnicodeToAsciiNormalizer()] + list(text_normalizers)
         self.text_normalizers = text_normalizers
 
     def generate(

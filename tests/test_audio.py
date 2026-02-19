@@ -317,6 +317,18 @@ def test_audio_utils_remove_tags():
     assert cleaned_text == "Hello world"
 
 
+def test_unicode_to_ascii_normalizer():
+    from sdialog.audio.normalizers import UnicodeToAsciiNormalizer
+    n = UnicodeToAsciiNormalizer()
+    assert n.normalize("\u201CHello\u201D") == '"Hello"'    # curly double quotes
+    assert n.normalize("caf\u00e9") == "caf\u00e9"          # accented e (not in map, unchanged)
+    assert n.normalize("cost\u2014free") == "cost-free"     # em dash
+    assert n.normalize("90\u00B0") == "90 degrees"          # degree sign
+    assert n.normalize("\u2026") == "..."                    # ellipsis
+    assert n.normalize("Hello world") == "Hello world"      # no-op on plain ASCII
+    assert n.normalize("\u00BC") == " one quarter"           # fraction
+
+
 def test_furniture_get_top_z():
     furniture = Furniture(name="table", x=1, y=1, z=0.5, width=1, height=0.8, depth=1)
     assert furniture.get_top_z() == 1.3
