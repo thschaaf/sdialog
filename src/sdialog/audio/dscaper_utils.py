@@ -494,3 +494,55 @@ def generate_dscaper_timeline(
         logger.error(f"Failed to generate dscaper timeline for {timeline_name}: {resp.message}")
 
     return dialog
+
+
+def snr_callback_mix(
+    premix,
+    snr=None,
+    sir=None,
+    ref_mic=0,
+    n_src=None,
+    n_mics=None,
+    dialog: AudioDialog = None,
+    amplitude_factor: float = 2.0,
+    speaker_role: str = Role.SPEAKER_2.value
+):
+    """
+    Callback to lower the gain of a specific speaker during room simulation mixing.
+
+    :param premix: The premix array from pyroomacoustics.
+    :type premix: np.ndarray
+    :param snr: The SNR value (unused, required by pyroomacoustics callback signature).
+    :type snr: float
+    :param sir: The SIR value (unused, required by pyroomacoustics callback signature).
+    :type sir: float
+    :param ref_mic: The reference microphone index.
+    :type ref_mic: int
+    :param n_src: The number of sources.
+    :type n_src: int
+    :param n_mics: The number of microphones.
+    :type n_mics: int
+    :param dialog: The audio dialogue containing audio source metadata.
+    :type dialog: AudioDialog
+    :param amplitude_factor: Factor to divide the speaker's amplitude by (2.0 = halve volume).
+    :type amplitude_factor: float
+    :param speaker_role: The speaker role to attenuate (e.g. "speaker_1" or "speaker_2").
+    :type speaker_role: str
+    :return: The mixed audio.
+    :rtype: np.ndarray
+    """
+    import numpy as np
+
+    if speaker_role not in [Role.SPEAKER_1.value, Role.SPEAKER_2.value]:
+        raise ValueError(f"Invalid speaker role: {speaker_role}")
+
+    speaker_indices = [
+        i for i, s in enumerate(dialog.audio_sources)
+        if s.position == speaker_role or s.name == speaker_role
+    ]
+    valid_indices = [i for i in speaker_indices if i < premix.shape[0]]
+
+    if valid_indices:
+        premix[valid_indices, :, :] /= amplitude_factor
+
+    return np.sum(premix, axis=0)
