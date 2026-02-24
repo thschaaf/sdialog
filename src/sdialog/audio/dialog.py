@@ -892,7 +892,7 @@ class AudioDialog(Dialog):
             found_time = 0.0
 
             # If there is speech, find the time of the tag in the alignment based on the words before the tag
-            if alignment is not None:
+            if alignment is not None and len(alignment) > 0:
 
                 # Heuristic: count words before the tag in the clean text representation
                 # and map to the word index in the alignment.
